@@ -1,3 +1,4 @@
+
 const mongoose = require("mongoose");
 const { Schema } = mongoose;
 
@@ -6,17 +7,48 @@ const UserSchema = new Schema(
     User_id: { type: String, required: true, unique: true },
     Username: { type: String, required: true, unique: true, trim: true },
     Password: { type: String, required: true }, // bcrypt hash
+
     Phone_number: { type: String, trim: true },
-    Email: { type: String, required: true, unique: true, lowercase: true, trim: true },
+    Email: {
+      type: String,
+      required: true,
+      unique: true,
+      lowercase: true,
+      trim: true,
+    },
     Full_name: { type: String, trim: true },
-    Status: { type: String, enum: ["active", "blocked"], default: "active" },
+
+    // Phân biệt khách hàng và tài khoản quản trị
+    Role: {
+      type: String,
+      enum: ["Customer", "Manager", "Staff"],
+      default: "Customer",
+    },
+
+    // Trạng thái tài khoản theo BPMN
+    Status: {
+      type: String,
+      enum: ["active", "blocked"],
+      default: "active",
+    },
+
+    // Phục vụ khóa đăng nhập tạm thời nếu BPMN đăng nhập quy định
+    Failed_Login_Count: { type: Number, default: 0 },
+    Locked_Until: { type: Date, default: null },
+
     Created_at: { type: Date, default: Date.now },
+
     Reset_otp: { type: String, default: null },
     Reset_otp_expires: { type: Date, default: null },
-  Total_spent: {
-  type: Number,
-  default: 0 
-}
+    
+    // OTP đặt lại mật khẩu riêng cho tài khoản Admin
+    Admin_reset_otp_hash: { type: String, default: null },
+    Admin_reset_otp_expires: { type: Date, default: null },
+    Admin_reset_otp_sent_at: { type: Date, default: null },
+    Admin_reset_otp_attempts: { type: Number, default: 0 },
+    Admin_reset_otp_locked_until: { type: Date, default: null },
+
+    Total_spent: { type: Number, default: 0 },
   },
   { collection: "User" }
 );

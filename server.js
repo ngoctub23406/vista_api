@@ -68,3 +68,6 @@ app.use('/api/reviews', reviewRoutes);
 
 const chatbotRoutes = require("./routes/chatbot.routes");
 app.use("/api/chatbot", chatbotRoutes);
+
+const adminRoutes = require("./routes/admin.routes");
+app.use("/api/admin", adminRoutes);
