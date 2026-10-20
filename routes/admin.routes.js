@@ -17,5 +17,11 @@ router.get(
 router.post("/auth/forgot-password", passwordResetController.forgotPassword);
 router.post("/auth/verify-otp", passwordResetController.verifyOtp);
 router.post("/auth/reset-password", passwordResetController.resetPassword);
+router.post(
+  "/auth/change-password",
+  authMiddleware,
+  authMiddleware.requireRole("Manager", "Staff"),
+  passwordResetController.changePassword
+);
 
 module.exports = router;
