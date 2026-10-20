@@ -458,3 +458,90 @@ exports.resetPassword = async (req, res) => {
     });
   }
 };
+
+// POST /api/admin/auth/change-password
+exports.changePassword = async (req, res) => {
+  let phase = "request validation";
+
+  try {
+    const { currentPassword, newPassword, confirmPassword } = req.body || {};
+
+    if (
+      typeof currentPassword !== "string" ||
+      !currentPassword ||
+      typeof newPassword !== "string" ||
+      typeof confirmPassword !== "string" ||
+      newPassword.length < 8
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Vui lòng nhập đầy đủ thông tin. Mật khẩu mới phải có ít nhất 8 ký tự.",
+      });
+    }
+
+    if (newPassword !== confirmPassword) {
+      return res.status(400).json({
+        success: false,
+        message: "Mật khẩu mới và xác nhận mật khẩu không khớp.",
+      });
+    }
+
+    phase = "admin account lookup";
+    const user = await User.findOne({
+      User_id: req.user.User_id,
+      Role: { $in: ["Manager", "Staff"] },
+      Status: "active",
+    });
+
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        message: "Tài khoản quản trị không còn khả dụng. Vui lòng đăng nhập lại.",
+      });
+    }
+
+    phase = "current password verification";
+    const isCurrentPasswordValid = await bcrypt.compare(
+      currentPassword,
+      user.Password,
+    );
+
+    if (!isCurrentPasswordValid) {
+      return res.status(400).json({
+        success: false,
+        message: "Mật khẩu hiện tại không đúng.",
+      });
+    }
+
+    phase = "password hash and persistence";
+    const passwordHash = await bcrypt.hash(newPassword, 10);
+    const result = await User.updateOne(
+      {
+        _id: user._id,
+        User_id: req.user.User_id,
+        Role: { $in: ["Manager", "Staff"] },
+        Status: "active",
+        Password: user.Password,
+      },
+      { $set: { Password: passwordHash } },
+    );
+
+    if (result.modifiedCount !== 1) {
+      return res.status(409).json({
+        success: false,
+        message: "Mật khẩu đã được thay đổi trong phiên này. Vui lòng đăng nhập lại.",
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: "Đổi mật khẩu thành công.",
+    });
+  } catch (error) {
+    logFailure(phase, error);
+    return res.status(500).json({
+      success: false,
+      message: "Không thể đổi mật khẩu lúc này. Vui lòng thử lại sau.",
+    });
+  }
+};
