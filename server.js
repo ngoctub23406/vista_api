@@ -2,6 +2,7 @@ const express = require("express");
 const dotenv = require("dotenv");
 const cors = require("cors");
 const connectDB = require("./config/db");
+const shippingSimulator = require("./jobs/shipping-simulator.job");
 
 dotenv.config();
 connectDB();
@@ -32,9 +33,22 @@ app.get("/", (req, res) => {
 });
 
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
+const http = require("http");
+const socketService = require("./services/socket.service");
+
+// Dùng chung một HTTP server cho Express và Socket.IO (thông báo realtime)
+const server = http.createServer(app);
+socketService.init(server, { corsOrigin: "http://localhost:4200" });
+
+server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
+// Giả lập đơn vị vận chuyển cập nhật trạng thái đơn hàng
+shippingSimulator.start();
+
+// Nhắc Admin các đơn quá hạn xử lý (SLA)
+require("./jobs/sla-reminder.job").start();
 
 const productRoutes = require("./routes/product.routes");
 app.use("/api/products", productRoutes);
@@ -71,3 +85,6 @@ app.use("/api/chatbot", chatbotRoutes);
 
 const adminRoutes = require("./routes/admin.routes");
 app.use("/api/admin", adminRoutes);
+
+const notificationRoutes = require("./routes/notification.routes");
+app.use("/api/notifications", notificationRoutes);

@@ -1,7 +1,15 @@
 const { Order, User, Payment, Delivery, Order_detail, Product_variant, Return_order } = require('../models/schema');
+const {
+  ORDER_EVENTS,
+  SYSTEM_ACTOR,
+  buildHistoryEntry,
+  isOrderConfirmed,
+  hasCustomerConfirmation,
+  tryCompleteOrder,
+} = require('../services/order-status.service');
+const { notifyOrderEvent } = require('../services/notification.service');
+const { CUSTOMER_CANCEL_REASONS, codeFromLabel } = require('../services/reason-catalog');
 
-const PROCESSING_STATUSES = new Set(['processing']);
-const PROCESSING_AUTO_SHIP_MS = 90 * 1000;
 const IMMUTABLE_STATUSES = new Set(['returning', 'cancelled', 'delivered']);
 const SHIPPING_STATUSES = new Set(['shipping', 'delivering']);
 const REVIEW_DISPLAY_STATUSES = new Set(['review', 'delivered']);
@@ -169,7 +177,6 @@ function resolveHistoryStatus(order, paymentInfo) {
   const paymentType = normalizePaymentType(paymentInfo?.Payment_type);
   const paymentStatus = cleanText(paymentInfo?.Payment_status || 'pending');
   const currentStatus = normalizeStatusValue(order?.Status);
-  const processingStartedAt = order?.Processing_started_at ? new Date(order.Processing_started_at) : null;
   const createdAt = order?.Created_at ? new Date(order.Created_at) : null;
   const isBankTransfer = paymentType === 'BankTransfer';
 
@@ -197,16 +204,7 @@ function resolveHistoryStatus(order, paymentInfo) {
       : 'processing';
   }
 
-  const processingReferenceTime = processingStartedAt && !Number.isNaN(processingStartedAt.getTime())
-    ? processingStartedAt
-    : createdAt;
-
-  if (PROCESSING_STATUSES.has(nextStatus) && processingReferenceTime && !Number.isNaN(processingReferenceTime.getTime())) {
-    const elapsed = Date.now() - processingReferenceTime.getTime();
-    if (elapsed >= PROCESSING_AUTO_SHIP_MS) {
-      nextStatus = 'shipping';
-    }
-  }
+  // Bỏ tự chuyển sang "Đang giao" sau 90 giây: Staff xử lý đơn và giả lập ĐVVC cập nhật trạng thái
 
   if (!nextStatus) {
     nextStatus = isBankTransfer ? 'pending_payment' : 'processing';
@@ -335,16 +333,37 @@ const getOrderHistory = async (req, res) => {
 
         if (resolvedStatus === 'cancelled') {
           orderUpdate.Cancel_reason = order.Cancel_reason || 'Đơn hàng đã tự động hủy do quá hạn thanh toán.';
+          orderUpdate.Cancel_reason_code = order.Cancel_reason_code || 'payment_timeout';
+          orderUpdate.Cancelled_by = order.Cancelled_by || 'system';
           orderUpdate.Cancelled_at = order.Cancelled_at || new Date();
         }
 
+        const historyUpdate = resolvedStatus === 'cancelled'
+          ? {
+            $push: {
+              Status_history: buildHistoryEntry({
+                fromStatus: order.Status,
+                toStatus: 'cancelled',
+                event: ORDER_EVENTS.CANCELLED,
+                actor: SYSTEM_ACTOR,
+                note: orderUpdate.Cancel_reason,
+              }),
+            },
+          }
+          : {};
+
         await Order.updateOne(
           { Order_id: order.Order_id },
-          { $set: orderUpdate }
+          { $set: orderUpdate, ...historyUpdate }
         );
       }
 
-      if (resolvedStatus === 'shipping' && normalizeStatusValue(deliveryInfo?.Status) !== 'shipping') {
+      // Chỉ đẩy Delivery lên "shipping" khi còn ở bước trước đó.
+      // Không được ghi đè "delivered" (ĐVVC đã giao) về lại "shipping".
+      if (
+        resolvedStatus === 'shipping' &&
+        !['shipping', 'delivered'].includes(normalizeStatusValue(deliveryInfo?.Status))
+      ) {
         await Delivery.updateOne(
           { Order_id: order.Order_id },
           {
@@ -418,6 +437,7 @@ const getOrderHistory = async (req, res) => {
         Return_evidence_images: returnSummary.Return_evidence_images,
         Review_status: derivedReviewStatus,
         Processing_started_at: order.Processing_started_at || null,
+        Is_confirmed: isOrderConfirmed(order),
         Customer_name: orderAddressSnapshot.Receiver_name || userInfo?.Full_name || order.Customer_name || '',
         Phone_number: orderAddressSnapshot.Receiver_phone || userInfo?.Phone_number || order.Phone_number || '',
         Email: orderAddressSnapshot.Email || userInfo?.Email || order.Email || '',
@@ -441,7 +461,7 @@ const getOrderHistory = async (req, res) => {
         Shipping_fee: deliveryInfo ? Number(deliveryInfo.Shipping_fee) || 0 : 0,
         Delivery_status:
           resolvedStatus === 'shipping'
-            ? 'shipping'
+            ? (deliveryInfo?.Status === 'delivered' ? 'delivered' : 'shipping')
             : resolvedStatus === 'delivered'
               ? 'delivered'
               : deliveryInfo
@@ -512,67 +532,53 @@ const markOrderReceived = async (req, res) => {
       });
     }
 
-    const payment = await Payment.findOne({ Order_id: orderId }).lean();
-    const normalizedPaymentType = normalizePaymentType(payment?.Payment_type);
-    const deliveredAt = new Date();
-
-    if (payment && normalizedPaymentType === 'COD') {
-      const paymentUpdate = {
-        Payment_status: 'paid',
-      };
-
-      if (!payment.Paid_at) {
-        paymentUpdate.Paid_at = deliveredAt;
-      }
-
-      await Payment.updateOne(
-        { Order_id: orderId },
-        { $set: paymentUpdate }
-      );
-    }
-
+    // Khách chỉ xác nhận được sau khi đơn vị vận chuyển báo đã giao
     const delivery = await Delivery.findOne({ Order_id: orderId }).lean();
-    if (delivery) {
-      const deliveryUpdate = {
-        Status: 'delivered',
-        Delivered_at: deliveredAt,
-      };
+    if (delivery?.Status !== 'delivered') {
+      return res.status(400).json({
+        success: false,
+        message: 'Đơn vị vận chuyển chưa xác nhận giao hàng, bạn chưa thể xác nhận đã nhận hàng.',
+      });
+    }
 
-      await Delivery.updateOne(
-        { Order_id: orderId },
-        { $set: deliveryUpdate }
+    if (!hasCustomerConfirmation(order)) {
+      await Order.updateOne(
+        {
+          Order_id: orderId,
+          'Status_history.Event': {
+            $nin: [ORDER_EVENTS.CUSTOMER_RECEIVED, ORDER_EVENTS.AUTO_RECEIVED],
+          },
+        },
+        {
+          $push: {
+            Status_history: buildHistoryEntry({
+              fromStatus: order.Status,
+              toStatus: order.Status,
+              event: ORDER_EVENTS.CUSTOMER_RECEIVED,
+              actor: { id: order.User_id, name: order.Receiver_name || 'Khách hàng' },
+            }),
+          },
+        }
       );
     }
 
-    await Order.updateOne(
-      { Order_id: orderId },
-      { $set: { Status: 'delivered' } }
-    );
+    // Đủ 2 điều kiện (ĐVVC đã giao + khách xác nhận) thì hoàn tất đơn, cộng Total_spent
+    await tryCompleteOrder(orderId);
 
-    const amountToAdd = Number(order.Total_amount) || 0;
-    const userId = order.User_id;
-
-    if (userId && amountToAdd > 0) {
-      await User.updateOne(
-        { User_id: userId },
-        { $inc: { Total_spent: amountToAdd } } 
-      );
-      console.log(`Đã cộng ${amountToAdd} điểm cho User ${userId}`);
-    }
+    const updatedOrder = await Order.findOne({ Order_id: orderId }).select('Status Processing_started_at').lean();
+    const payment = await Payment.findOne({ Order_id: orderId }).lean();
 
     return res.status(200).json({
       success: true,
       message: 'Đã ghi nhận đơn hàng đã được nhận.',
       data: {
         Order_id: orderId,
-        Status: 'delivered',
+        Status: updatedOrder?.Status || order.Status,
         previousStatus: currentStatus,
         Delivery_status: 'delivered',
-        Payment_status: payment && normalizedPaymentType === 'COD'
-          ? 'paid'
-          : cleanText(payment?.Payment_status || 'pending'),
-        Delivered_at: delivery ? deliveredAt : null,
-        Processing_started_at: order.Processing_started_at || null,
+        Payment_status: cleanText(payment?.Payment_status || 'pending'),
+        Delivered_at: delivery.Delivered_at || null,
+        Processing_started_at: updatedOrder?.Processing_started_at || null,
       },
     });
   } catch (error) {
@@ -627,14 +633,49 @@ const cancelOrder = async (req, res) => {
       });
     }
 
-    if (!CANCELLABLE_STATUSES.has(currentStatus)) {
+    if (!CANCELLABLE_STATUSES.has(currentStatus) || isOrderConfirmed(order)) {
       return res.status(400).json({
         success: false,
-        message: 'Chỉ có thể hủy đơn hàng chờ thanh toán, đang xử lý hoặc đang giao.',
+        message: 'Đơn hàng đã được cửa hàng xác nhận, bạn không thể hủy đơn.',
       });
     }
 
     const cancelledAt = new Date();
+
+    // Cập nhật có điều kiện để không hủy trùng lúc Staff vừa xác nhận đơn
+    const cancelResult = await Order.updateOne(
+      {
+        Order_id: orderId,
+        Status: { $in: Array.from(CANCELLABLE_STATUSES) },
+        'Status_history.Event': { $ne: ORDER_EVENTS.CONFIRMED },
+      },
+      {
+        $set: {
+          Status: 'cancelled',
+          Cancel_reason: reason,
+          Cancel_reason_code: codeFromLabel(CUSTOMER_CANCEL_REASONS, reason),
+          Cancelled_by: 'customer',
+          Cancelled_at: cancelledAt,
+        },
+        $push: {
+          Status_history: buildHistoryEntry({
+            fromStatus: order.Status,
+            toStatus: 'cancelled',
+            event: ORDER_EVENTS.CANCELLED,
+            actor: { id: order.User_id, name: order.Receiver_name || 'Khách hàng' },
+            note: reason,
+          }),
+        },
+      }
+    );
+
+    if (cancelResult.modifiedCount === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Đơn hàng đã được cửa hàng xác nhận, bạn không thể hủy đơn.',
+      });
+    }
+
     const orderDetails = await Order_detail.find({ Order_id: orderId }).lean();
 
     await Promise.all(
@@ -669,16 +710,7 @@ const cancelOrder = async (req, res) => {
       { $set: { Status: 'failed' } }
     );
 
-    await Order.updateOne(
-      { Order_id: orderId },
-      {
-        $set: {
-          Status: 'cancelled',
-          Cancel_reason: reason,
-          Cancelled_at: cancelledAt,
-        },
-      }
-    );
+    notifyOrderEvent(orderId, 'order_cancelled_by_customer');
 
     return res.status(200).json({
       success: true,
@@ -705,7 +737,7 @@ const cancelOrder = async (req, res) => {
 
 const markOrderReviewed = async (req, res) => {
   try {
-    const orderId = req.body.orderId || req.body.Order_id; 
+    const orderId = req.body.orderId || req.body.Order_id || req.body.Order_code; 
 
     if (!orderId) {
       return res.status(400).json({ success: false, message: 'Thiếu mã đơn hàng.' });

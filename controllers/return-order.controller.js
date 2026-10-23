@@ -1,4 +1,7 @@
 const { Order, Order_detail, Return_order, User } = require('../models/schema');
+const { notifyOrderEvent } = require('../services/notification.service');
+const { ORDER_EVENTS, buildHistoryEntry } = require('../services/order-status.service');
+const { RETURN_REASONS, codesFromText } = require('../services/reason-catalog');
 
 const RETURNABLE_ORDER_STATUSES = new Set(['delivered', 'review']);
 const ACTIVE_RETURN_STATUSES = ['pending', 'approved', 'completed', 'refunded'];
@@ -312,6 +315,7 @@ const createReturnOrder = async (req, res) => {
         Product_variant_id: selectedItem.Product_variant_id,
         Return_quantity: quantity,
         Reason_type: reasonType,
+        Reason_codes: codesFromText(RETURN_REASONS, reasonType),
         Description: description,
         Evidence_images: index === 0 ? evidenceImages : [],
         Refund_amount: refundAmount,
@@ -329,7 +333,18 @@ const createReturnOrder = async (req, res) => {
 
     await Order.updateOne(
       { Order_id: orderId },
-      { $set: { Status: 'returning' } }
+      {
+        $set: { Status: 'returning' },
+        $push: {
+          Status_history: buildHistoryEntry({
+            fromStatus: order.Status,
+            toStatus: 'returning',
+            event: ORDER_EVENTS.RETURN_REQUESTED,
+            actor: { id: order.User_id, name: order.Receiver_name || 'Khách hàng' },
+            note: reasonType,
+          }),
+        },
+      }
     );
     // ==========================================
     // LOGIC TRỪ ĐIỂM: CHỈ TRỪ ĐÚNG SỐ TIỀN HOÀN TRẢ
@@ -354,6 +369,8 @@ const createReturnOrder = async (req, res) => {
       console.log(`Đã TRỪ ${totalRefundAmount} điểm của User ${userId} do hoàn hàng`);
     }
     // ==========================================
+
+    notifyOrderEvent(orderId, 'return_requested');
 
     return res.status(201).json({
       success: true,

@@ -7,6 +7,7 @@ const {
   Product,
   Product_variant,
 } = require("../models/schema");
+const { notifyOrderEvent } = require("../services/notification.service");
 
 function cleanString(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
@@ -277,6 +278,8 @@ exports.createOrder = async (req, res) => {
         )
       )
     );
+
+    notifyOrderEvent(orderId, "order_created");
 
     return res.status(201).json({
       success: true,

@@ -192,6 +192,20 @@ const VoucherSchema = new mongoose.Schema(
 );
 
 
+// Lịch sử chuyển trạng thái đơn hàng (Staff hoặc hệ thống giả lập ĐVVC)
+const OrderStatusHistorySchema = new Schema(
+  {
+    From_status: { type: String, default: "" },
+    To_status: { type: String, default: "" },
+    Event: { type: String, required: true },
+    Actor_id: { type: String, default: "" },
+    Actor_name: { type: String, default: "" },
+    Note: { type: String, default: "" },
+    Created_at: { type: Date, default: Date.now },
+  },
+  { _id: false }
+);
+
 const OrderSchema = new Schema(
   {
     Order_id: { type: String, required: true, unique: true },
@@ -214,13 +228,17 @@ const OrderSchema = new Schema(
     Total_amount: { type: Number, required: true },
     Order_notes: { type: String },
     Cancel_reason: { type: String, default: "" },
+    Cancel_reason_code: { type: String, default: "" }, // Mã lý do hủy (services/reason-catalog.js)
+    Cancelled_by: { type: String, enum: ["", "customer", "staff", "system"], default: "" },
     Cancelled_at: { type: Date, default: null },
+    Sla_reminded: { type: [String], default: [] }, // Các bước SLA đã gửi nhắc quá hạn
     Status: {
       type: String,
-      enum: ["pending_payment", "processing", "shipping", "review", "returning", "cancelled"],
+      enum: ["pending_payment", "processing", "shipping", "delivered", "review", "returning", "cancelled"],
       default: "pending_payment",
     },
     Processing_started_at: { type: Date, default: null },
+    Status_history: { type: [OrderStatusHistorySchema], default: [] },
     Review_status: {
       type: String,
       enum: ["not_reviewed", "reviewed"],
@@ -299,6 +317,7 @@ const ReturnOrderSchema = new Schema(
     Product_variant_id: { type: String, required: true, ref: "Product_variant" },
     Return_quantity: { type: Number, default: 1, min: 1 },
     Reason_type: { type: String, required: true, trim: true },
+    Reason_codes: { type: [String], default: [] }, // Mã lý do hoàn trả (services/reason-catalog.js)
     Description: { type: String, default: "" },
     Evidence_images: [{ type: String }],
     Refund_amount: { type: Number, default: 0 },
