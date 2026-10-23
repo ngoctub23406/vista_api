@@ -1,4 +1,5 @@
 const { Order, Payment } = require("../models/schema");
+const { notifyOrderEvent } = require("../services/notification.service");
 
 function cleanString(value) {
   return String(value || "").trim();
@@ -128,6 +129,8 @@ exports.confirmBankTransfer = async (req, res) => {
         }
       );
     }
+
+    notifyOrderEvent(payment.Order_id, "payment_confirmed");
 
     return res.json({
       success: true,
