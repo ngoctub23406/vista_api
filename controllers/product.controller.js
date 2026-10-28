@@ -350,6 +350,17 @@
     }
   };
 
+  exports.getAllBrands = async (req, res) => {
+    try {
+      const brands = await Brand.find()
+        .select("Brand_id Brand_name Description Origin_country")
+        .lean();
+      res.json({ success: true, data: brands });
+    } catch (error) {
+      res.status(500).json({ success: false, message: error.message });
+    }
+  };
+
 
   exports.getRelatedProducts = async (req, res) => {
     try {

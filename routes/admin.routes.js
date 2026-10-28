@@ -5,6 +5,57 @@ const authMiddleware = require("../middleware/auth.middleware");
 const staffController = require("../controllers/admin/staff.controller");
 const passwordResetController = require("../controllers/admin/password-reset.controller");
 const orderController = require("../controllers/admin/order.controller");
+const productController = require("../controllers/admin/product.controller");
+
+// Manager và Staff xem danh sách và chi tiết sản phẩm
+router.get(
+  "/products",
+  authMiddleware,
+  authMiddleware.requireRole("Manager", "Staff"),
+  productController.getProducts
+);
+router.post(
+  "/products",
+  authMiddleware,
+  authMiddleware.requireRole("Manager"),
+  productController.createProduct
+);
+router.post(
+  "/products/bulk-import",
+  authMiddleware,
+  authMiddleware.requireRole("Manager"),
+  productController.bulkImportProducts
+);
+router.get(
+  "/products/:id",
+  authMiddleware,
+  authMiddleware.requireRole("Manager", "Staff"),
+  productController.getProductById
+);
+router.put(
+  "/products/:id",
+  authMiddleware,
+  authMiddleware.requireRole("Manager"),
+  productController.updateProduct
+);
+router.delete(
+  "/products/:id",
+  authMiddleware,
+  authMiddleware.requireRole("Manager"),
+  productController.deleteProduct
+);
+router.get(
+  "/categories",
+  authMiddleware,
+  authMiddleware.requireRole("Manager", "Staff"),
+  productController.getCategories
+);
+router.get(
+  "/brands",
+  authMiddleware,
+  authMiddleware.requireRole("Manager", "Staff"),
+  productController.getBrands
+);
 
 // Chỉ Manager được xem danh sách Staff
 router.get(
