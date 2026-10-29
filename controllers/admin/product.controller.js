@@ -15,6 +15,17 @@ function hasOwn(value, key) {
   return Object.prototype.hasOwnProperty.call(value, key);
 }
 
+function resolveProductStatus(explicitStatus, variants, fallbackStatus = "on_sale") {
+  const allOutOfStock = Array.isArray(variants) && variants.length > 0 && variants.every((variant) => variant.Stock_quantity === 0);
+  if (allOutOfStock) {
+    return "out_of_stock";
+  }
+  if (explicitStatus && PRODUCT_STATUSES.includes(explicitStatus)) {
+    return explicitStatus;
+  }
+  return fallbackStatus;
+}
+
 function validateOptionalString(value, fieldName) {
   return value === undefined || typeof value === "string"
     ? null
@@ -123,6 +134,7 @@ function validateProductInput(body) {
       ...(hasOwn(body, "Technical_specs") ? { Technical_specs: body.Technical_specs } : {}),
       ...(hasOwn(body, "Average_rating") ? { Average_rating: body.Average_rating } : {}),
       ...(hasOwn(body, "Total_reviews") ? { Total_reviews: body.Total_reviews } : {}),
+      ...(hasOwn(body, "Status") ? { Status: body.Status } : {}),
       Discount: hasOwn(body, "Discount") ? body.Discount : 0,
       Is_Flash_Sale: hasOwn(body, "Is_Flash_Sale") ? body.Is_Flash_Sale : false,
       Is_AI: hasOwn(body, "Is_AI") ? body.Is_AI : false,
@@ -280,9 +292,11 @@ exports.createProduct = async (req, res) => {
       return res.status(400).json({ success: false, message: "Brand_id không tồn tại" });
     }
 
-    const productStatus = validated.variants.every((variant) => variant.Stock_quantity === 0)
-      ? "out_of_stock"
-      : "on_sale";
+    const productStatus = resolveProductStatus(
+      validated.product.Status,
+      validated.variants,
+      "on_sale"
+    );
     const productInput = { ...validated.product, Status: productStatus };
     let transactionsSupported = true;
 
@@ -483,9 +497,11 @@ exports.updateProduct = async (req, res) => {
       return res.status(400).json({ success: false, message: "Brand_id không tồn tại" });
     }
 
-    const productStatus = validated.variants.every((variant) => variant.Stock_quantity === 0)
-      ? "out_of_stock"
-      : "on_sale";
+    const productStatus = resolveProductStatus(
+      validated.product.Status,
+      validated.variants,
+      existing.Status || "on_sale"
+    );
 
     const variantsToInsert = validated.variants.map((variant) => ({
       ...variant,
