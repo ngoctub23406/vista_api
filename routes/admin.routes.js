@@ -57,12 +57,49 @@ router.get(
   productController.getBrands
 );
 
-// Chỉ Manager được xem danh sách Staff
+// Quản lý nhân sự: chỉ Manager
 router.get(
   "/staff",
   authMiddleware,
   authMiddleware.requireRole("Manager"),
   staffController.getStaffList
+);
+router.post(
+  "/staff",
+  authMiddleware,
+  authMiddleware.requireRole("Manager"),
+  staffController.createStaff
+);
+// Phải đặt trước "/staff/:userId" để "availability" không bị coi là mã nhân viên
+router.get(
+  "/staff/availability",
+  authMiddleware,
+  authMiddleware.requireRole("Manager"),
+  staffController.checkAvailability
+);
+router.get(
+  "/staff/:userId",
+  authMiddleware,
+  authMiddleware.requireRole("Manager"),
+  staffController.getStaffDetail
+);
+router.patch(
+  "/staff/:userId",
+  authMiddleware,
+  authMiddleware.requireRole("Manager"),
+  staffController.updateStaff
+);
+router.patch(
+  "/staff/:userId/lock",
+  authMiddleware,
+  authMiddleware.requireRole("Manager"),
+  staffController.lockStaff
+);
+router.patch(
+  "/staff/:userId/unlock",
+  authMiddleware,
+  authMiddleware.requireRole("Manager"),
+  staffController.unlockStaff
 );
 
 // Khôi phục mật khẩu Admin: Manager và Staff
