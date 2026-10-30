@@ -7,6 +7,7 @@ const passwordResetController = require("../controllers/admin/password-reset.con
 const orderController = require("../controllers/admin/order.controller");
 const productController = require("../controllers/admin/product.controller");
 const reviewController = require("../controllers/admin/review.controller");
+const returnOrderController = require("../controllers/admin/return-order.controller");
 
 // Manager và Staff xem danh sách và chi tiết sản phẩm
 router.get(
@@ -199,6 +200,51 @@ router.post(
   authMiddleware,
   authMiddleware.requireRole("Staff"),
   reviewController.sendReply
+
+// ==========================================
+// HẬU MÃI & ĐỔI TRẢ (H.Ngọc)
+// Staff thao tác xử lý, Manager chỉ xem
+// ==========================================
+router.get(
+  "/returns",
+  authMiddleware,
+  authMiddleware.requireRole("Staff", "Manager"),
+  returnOrderController.getReturns
+);
+
+router.get(
+  "/returns/:id",
+  authMiddleware,
+  authMiddleware.requireRole("Staff", "Manager"),
+  returnOrderController.getReturnDetail
+);
+
+router.post(
+  "/returns/:id/approve",
+  authMiddleware,
+  authMiddleware.requireRole("Staff"),
+  returnOrderController.approveReturn
+);
+
+router.post(
+  "/returns/:id/reject",
+  authMiddleware,
+  authMiddleware.requireRole("Staff"),
+  returnOrderController.rejectReturn
+);
+
+router.post(
+  "/returns/:id/accept-goods",
+  authMiddleware,
+  authMiddleware.requireRole("Staff"),
+  returnOrderController.acceptGoods
+);
+
+router.post(
+  "/returns/:id/reject-goods",
+  authMiddleware,
+  authMiddleware.requireRole("Staff"),
+  returnOrderController.rejectGoods
 );
 
 module.exports = router;

@@ -13,6 +13,10 @@ const ORDER_EVENTS = {
   AUTO_RECEIVED: "auto_received",
   COMPLETED: "completed",
   RETURN_REQUESTED: "return_requested",
+  RETURN_APPROVED: "return_approved",
+  RETURN_REJECTED: "return_rejected",
+  RETURN_COMPLETED: "return_completed",
+  RETURN_GOODS_REJECTED: "return_goods_rejected",
 };
 
 // Người thực hiện khi trạng thái do giả lập đơn vị vận chuyển cập nhật

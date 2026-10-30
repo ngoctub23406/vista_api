@@ -310,6 +310,20 @@ const DeliverySchema = new Schema(
 );
 
 
+const ReturnOrderTimelineSchema = new Schema(
+  {
+    Step: { type: String, required: true },
+    Title: { type: String, required: true },
+    Description: { type: String, default: "" },
+    Actor_id: { type: String, default: "" },
+    Actor_name: { type: String, default: "" },
+    Actor_role: { type: String, default: "" },
+    Status: { type: String, default: "" },
+    Created_at: { type: Date, default: Date.now },
+  },
+  { _id: false }
+);
+
 const ReturnOrderSchema = new Schema(
   {
     Return_order_id: { type: String, required: true, unique: true },
@@ -317,7 +331,7 @@ const ReturnOrderSchema = new Schema(
     Product_variant_id: { type: String, required: true, ref: "Product_variant" },
     Return_quantity: { type: Number, default: 1, min: 1 },
     Reason_type: { type: String, required: true, trim: true },
-    Reason_codes: { type: [String], default: [] }, // Mã lý do hoàn trả (services/reason-catalog.js)
+    Reason_codes: { type: [String], default: [] },
     Description: { type: String, default: "" },
     Evidence_images: [{ type: String }],
     Refund_amount: { type: Number, default: 0 },
@@ -329,12 +343,26 @@ const ReturnOrderSchema = new Schema(
     Status: {
       type: String,
       enum: ["pending", "approved", "rejected", "completed", "refunded"],
-      default: "refunded",
+      default: "pending",
     },
+    Handled_by: { type: String, default: "" },
+    Handled_by_name: { type: String, default: "" },
+    Handled_at: { type: Date, default: null },
+    Reject_reason: { type: String, default: "" },
+    Inspected_by: { type: String, default: "" },
+    Inspected_by_name: { type: String, default: "" },
+    Inspected_at: { type: Date, default: null },
+    Inspected_result: { type: String, default: "" },
+    Timeline: { type: [ReturnOrderTimelineSchema], default: [] },
     Created_at: { type: Date, default: Date.now },
   },
   { collection: "Return_order" }
 );
+
+ReturnOrderSchema.index({ Created_at: -1, _id: -1 });
+ReturnOrderSchema.index({ Order_id: 1 });
+ReturnOrderSchema.index({ Status: 1 });
+
 
 
 // Lịch sử xử lý một đánh giá (kiểm duyệt, gợi ý AI, lưu nháp, gửi phản hồi)
