@@ -1,4 +1,6 @@
-const { Return_order, Order, Order_detail, Product_variant, Product, User, Notification } = require("../../models/schema");
+const { Return_order, Order, Order_detail, Product_variant, Product, User, Payment } = require("../../models/schema");
+const { createNotification } = require("../../services/notification.service");
+const { ORDER_EVENTS, buildHistoryEntry } = require("../../services/order-status.service");
 
 // Danh sách các trường tóm tắt cần hiển thị trên bảng danh sách (tương tự formatOrderSummary trong order.controller)
 const RETURN_SUMMARY_FIELDS = [
@@ -315,7 +317,7 @@ const getReturns = async (req, res) => {
       Return_order.countDocuments(query),
       Return_order.find(query)
         .select(RETURN_SUMMARY_FIELDS)
-        .sort({ _id: -1 })
+        .sort({ Created_at: -1, _id: -1 })
         .skip((page - 1) * limit)
         .limit(limit)
         .lean(),
@@ -497,18 +499,31 @@ const approveReturn = async (req, res) => {
 
     await returnOrder.save();
 
+    // BUG-03: Ghi nhận sự kiện duyệt yêu cầu đổi trả vào lịch sử đơn hàng gốc
+    await Order.updateOne(
+      { Order_id: returnOrder.Order_id },
+      {
+        $push: {
+          Status_history: buildHistoryEntry({
+            fromStatus: order?.Status || 'returning',
+            toStatus: order?.Status || 'returning',
+            event: ORDER_EVENTS.RETURN_APPROVED,
+            actor: { id: staffId, name: staffName },
+            note: `Duyệt yêu cầu đổi trả mã ${returnOrder.Return_order_id}`
+          })
+        }
+      }
+    ).catch((err) => console.error("Error updating order history on approve:", err.message));
+
     // Gửi thông báo cho khách hàng
     if (order?.User_id) {
-      await Notification.create({
-        Notification_ID: "NOTIF_" + Date.now(),
-        User_ID: order.User_id,
-        Type: "hoàn trả hàng",
-        Title: "Yêu cầu đổi trả đã được phê duyệt",
-        Content: `Yêu cầu đổi trả mã ${returnOrder.Return_order_id} cho đơn hàng ${returnOrder.Order_id} đã được duyệt. Vui lòng gửi hàng về kho theo hướng dẫn.`,
-        Reference_ID: returnOrder.Return_order_id,
-        Is_Read: false,
-        Send_Status: "đã gửi",
-        Created_At: now,
+      await createNotification({
+        audience: "customer",
+        userId: order.User_id,
+        type: "hoàn trả hàng",
+        title: "Yêu cầu đổi trả đã được phê duyệt",
+        message: `Yêu cầu đổi trả mã ${returnOrder.Return_order_id} cho đơn hàng ${returnOrder.Order_id} đã được duyệt. Vui lòng gửi hàng về kho theo hướng dẫn.`,
+        orderId: returnOrder.Order_id,
       }).catch((e) => console.error("Error creating notif:", e.message));
     }
 
@@ -522,6 +537,94 @@ const approveReturn = async (req, res) => {
     return res.status(500).json({ success: false, message: "Lỗi phê duyệt yêu cầu đổi trả." });
   }
 };
+
+
+// BUG-03 HELPER: Khôi phục trạng thái đơn hàng gốc khi yêu cầu đổi trả bị từ chối
+async function handleOrderStateOnReturnRejection(orderId, rejectedReturnId, staffId, staffName, rejectReason, eventType) {
+  try {
+    const otherActiveReturns = await Return_order.find({
+      Order_id: orderId,
+      Return_order_id: { $ne: rejectedReturnId },
+      Status: { $in: ["pending", "approved"] },
+    }).lean();
+
+    if (otherActiveReturns.length > 0) {
+      // Vẫn còn yêu cầu đổi trả khác đang chờ xử lý -> Order giữ nguyên trạng thái 'returning'
+      await Order.updateOne(
+        { Order_id: orderId },
+        {
+          $push: {
+            Status_history: buildHistoryEntry({
+              fromStatus: "returning",
+              toStatus: "returning",
+              event: eventType,
+              actor: { id: staffId, name: staffName },
+              note: `Từ chối yêu cầu đổi trả ${rejectedReturnId}: ${rejectReason}`,
+            }),
+          },
+        }
+      );
+      return;
+    }
+
+    // Không còn yêu cầu nào đang active. Kiểm tra xem có yêu cầu nào đã thành công (completed/refunded) không.
+    const completedReturns = await Return_order.find({
+      Order_id: orderId,
+      Return_order_id: { $ne: rejectedReturnId },
+      Status: { $in: ["completed", "refunded"] },
+    }).lean();
+
+    if (completedReturns.length > 0) {
+      // Đã có món hàng khác được hoàn trả thành công -> Order vẫn mang tính chất hoàn hàng
+      await Order.updateOne(
+        { Order_id: orderId },
+        {
+          $push: {
+            Status_history: buildHistoryEntry({
+              fromStatus: "returning",
+              toStatus: "returning",
+              event: eventType,
+              actor: { id: staffId, name: staffName },
+              note: `Từ chối yêu cầu đổi trả ${rejectedReturnId}: ${rejectReason}`,
+            }),
+          },
+        }
+      );
+      return;
+    }
+
+    // Toàn bộ các yêu cầu đổi trả của đơn hàng này đều bị từ chối! Khôi phục lại trạng thái trước khi returning.
+    const order = await Order.findOne({ Order_id: orderId }).select("Status Status_history").lean();
+    let restoreStatus = "delivered";
+    if (Array.isArray(order?.Status_history)) {
+      for (let i = order.Status_history.length - 1; i >= 0; i--) {
+        const h = order.Status_history[i];
+        if (h.Event === ORDER_EVENTS.RETURN_REQUESTED && h.From_status) {
+          restoreStatus = h.From_status;
+          break;
+        }
+      }
+    }
+
+    await Order.updateOne(
+      { Order_id: orderId },
+      {
+        $set: { Status: restoreStatus },
+        $push: {
+          Status_history: buildHistoryEntry({
+            fromStatus: order?.Status || "returning",
+            toStatus: restoreStatus,
+            event: eventType,
+            actor: { id: staffId, name: staffName },
+            note: `Tất cả yêu cầu đổi trả bị từ chối · Khôi phục trạng thái đơn hàng về '${restoreStatus}' · Lý do: ${rejectReason}`,
+          }),
+        },
+      }
+    );
+  } catch (err) {
+    console.error("Error in handleOrderStateOnReturnRejection:", err.message);
+  }
+}
 
 // 4. Staff từ chối yêu cầu đổi trả ban đầu (Giai đoạn 1)
 const rejectReturn = async (req, res) => {
@@ -564,18 +667,25 @@ const rejectReturn = async (req, res) => {
 
     await returnOrder.save();
 
+    // BUG-03: Đồng bộ trạng thái đơn hàng gốc khi từ chối duyệt yêu cầu
+    await handleOrderStateOnReturnRejection(
+      returnOrder.Order_id,
+      returnOrder.Return_order_id,
+      staffId,
+      staffName,
+      cleanText(rejectReason),
+      ORDER_EVENTS.RETURN_REJECTED
+    );
+
     // Gửi thông báo cho khách hàng
     if (order?.User_id) {
-      await Notification.create({
-        Notification_ID: "NOTIF_" + Date.now(),
-        User_ID: order.User_id,
-        Type: "hoàn trả hàng",
-        Title: "Yêu cầu đổi trả bị từ chối",
-        Content: `Yêu cầu đổi trả mã ${returnOrder.Return_order_id} đã bị từ chối với lý do: ${rejectReason}`,
-        Reference_ID: returnOrder.Return_order_id,
-        Is_Read: false,
-        Send_Status: "đã gửi",
-        Created_At: now,
+      await createNotification({
+        audience: "customer",
+        userId: order.User_id,
+        type: "hoàn trả hàng",
+        title: "Yêu cầu đổi trả bị từ chối",
+        message: `Yêu cầu đổi trả mã ${returnOrder.Return_order_id} đã bị từ chối với lý do: ${rejectReason}`,
+        orderId: returnOrder.Order_id,
       }).catch((e) => console.error("Error creating notif:", e.message));
     }
 
@@ -632,18 +742,66 @@ const acceptGoods = async (req, res) => {
 
     await returnOrder.save();
 
+    // BUG-02 FIX: Chỉ điều chỉnh Total_spent của khách hàng khi Staff xác nhận hàng đạt tại kho
+    const refundAmount = Number(returnOrder.Refund_amount) || 0;
+    if (order?.User_id && refundAmount > 0) {
+      await User.updateOne(
+        { User_id: order.User_id },
+        { $inc: { Total_spent: -refundAmount } }
+      );
+      await User.updateOne(
+        { User_id: order.User_id, Total_spent: { $lt: 0 } },
+        { $set: { Total_spent: 0 } }
+      );
+    }
+
+    // BUG-03 FIX: Ghi nhận sự kiện hoàn tất đổi trả vào lịch sử đơn hàng gốc
+    await Order.updateOne(
+      { Order_id: returnOrder.Order_id },
+      {
+        $push: {
+          Status_history: buildHistoryEntry({
+            fromStatus: order?.Status || "returning",
+            toStatus: order?.Status || "returning",
+            event: ORDER_EVENTS.RETURN_COMPLETED,
+            actor: { id: staffId, name: staffName },
+            note: `Xác nhận hàng hoàn đạt mã ${returnOrder.Return_order_id} · Tồn kho +${returnQty} · Số tiền hoàn ${refundAmount.toLocaleString("vi-VN")} đ`,
+          }),
+        },
+      }
+    ).catch((err) => console.error("Error logging return completed history:", err.message));
+
+    // BUG-04 FIX: Cập nhật Payment_status thành 'refunded' khi toàn bộ đơn hàng được hoàn trả
+    try {
+      const otherCompletedReturns = await Return_order.find({
+        Order_id: returnOrder.Order_id,
+        Return_order_id: { $ne: returnOrder.Return_order_id },
+        Status: { $in: ["completed", "refunded"] },
+      }).lean();
+      const totalRefunded = otherCompletedReturns.reduce(
+        (sum, r) => sum + (Number(r.Refund_amount) || 0),
+        refundAmount
+      );
+      const orderTotal = Number(order?.Total_amount) || 0;
+      if (totalRefunded >= orderTotal && orderTotal > 0) {
+        await Payment.updateOne(
+          { Order_id: returnOrder.Order_id, Payment_status: "paid" },
+          { $set: { Payment_status: "refunded" } }
+        );
+      }
+    } catch (pErr) {
+      console.error("Error updating payment on acceptGoods:", pErr.message);
+    }
+
     // 3. Gửi thông báo cho khách hàng
     if (order?.User_id) {
-      await Notification.create({
-        Notification_ID: "NOTIF_" + Date.now(),
-        User_ID: order.User_id,
-        Type: "hoàn trả hàng",
-        Title: "Đổi trả hoàn tất & Đã ghi nhận hoàn tiền",
-        Content: `Sản phẩm hoàn trả mã ${returnOrder.Return_order_id} đã được kiểm tra đạt yêu cầu. Số tiền ${(returnOrder.Refund_amount || 0).toLocaleString("vi-VN")} đ đã được ghi nhận hoàn trả.`,
-        Reference_ID: returnOrder.Return_order_id,
-        Is_Read: false,
-        Send_Status: "đã gửi",
-        Created_At: now,
+      await createNotification({
+        audience: "customer",
+        userId: order.User_id,
+        type: "hoàn trả hàng",
+        title: "Đổi trả hoàn tất & Đã ghi nhận hoàn tiền",
+        message: `Sản phẩm hoàn trả mã ${returnOrder.Return_order_id} đã được kiểm tra đạt yêu cầu. Số tiền ${(returnOrder.Refund_amount || 0).toLocaleString("vi-VN")} đ đã được ghi nhận hoàn trả.`,
+        orderId: returnOrder.Order_id,
       }).catch((e) => console.error("Error creating notif:", e.message));
     }
 
@@ -700,18 +858,25 @@ const rejectGoods = async (req, res) => {
 
     await returnOrder.save();
 
+    // BUG-03: Đồng bộ trạng thái đơn hàng gốc khi từ chối nhận hàng hoàn
+    await handleOrderStateOnReturnRejection(
+      returnOrder.Order_id,
+      returnOrder.Return_order_id,
+      staffId,
+      staffName,
+      cleanText(rejectReason),
+      ORDER_EVENTS.RETURN_GOODS_REJECTED
+    );
+
     // Gửi thông báo cho khách hàng
     if (order?.User_id) {
-      await Notification.create({
-        Notification_ID: "NOTIF_" + Date.now(),
-        User_ID: order.User_id,
-        Type: "hoàn trả hàng",
-        Title: "Từ chối hoàn tiền sản phẩm",
-        Content: `Sản phẩm hoàn trả mã ${returnOrder.Return_order_id} không đạt điều kiện hoàn tiền: ${rejectReason}`,
-        Reference_ID: returnOrder.Return_order_id,
-        Is_Read: false,
-        Send_Status: "đã gửi",
-        Created_At: now,
+      await createNotification({
+        audience: "customer",
+        userId: order.User_id,
+        type: "hoàn trả hàng",
+        title: "Từ chối hoàn tiền sản phẩm",
+        message: `Sản phẩm hoàn trả mã ${returnOrder.Return_order_id} không đạt điều kiện hoàn tiền: ${rejectReason}`,
+        orderId: returnOrder.Order_id,
       }).catch((e) => console.error("Error creating notif:", e.message));
     }
 
