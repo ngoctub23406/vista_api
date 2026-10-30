@@ -337,6 +337,18 @@ const ReturnOrderSchema = new Schema(
 );
 
 
+// Lịch sử xử lý một đánh giá (kiểm duyệt, gợi ý AI, lưu nháp, gửi phản hồi)
+const ReviewHistorySchema = new Schema(
+  {
+    Event: { type: String, required: true },
+    Actor_id: { type: String, default: "" },
+    Actor_name: { type: String, default: "" },
+    Note: { type: String, default: "" },
+    Created_at: { type: Date, default: Date.now },
+  },
+  { _id: false }
+);
+
 const ReviewSchema = new Schema(
   {
     Review_id: { type: String, required: true, unique: true },
@@ -344,6 +356,34 @@ const ReviewSchema = new Schema(
     Rating: { type: Number, required: true, min: 1, max: 5 },
     Comment: { type: String, default: "" },
     Images: [{ type: String }],
+
+    Moderation_status: {
+      type: String,
+      enum: ["pending", "approved", "rejected"],
+      default: "pending",
+    },
+    Moderated_by: { type: String, default: "", ref: "User" },
+    Moderated_by_name: { type: String, default: "" },
+    Moderated_at: { type: Date, default: null },
+    Moderation_note: { type: String, default: "" },
+
+    AI_reply_draft: { type: String, default: "" },
+    Reply_status: {
+      type: String,
+      enum: ["no_auto_reply", "pending_review", "replied"],
+      default: "no_auto_reply",
+    },
+    Reply_draft: { type: String, default: "" }, 
+    Reply_draft_version: { type: Number, default: 0 },
+    Reply_draft_by_name: { type: String, default: "" },
+    Reply_draft_at: { type: Date, default: null },
+    Reply_reviewed: { type: Boolean, default: false },
+    Reply_content: { type: String, default: "" },
+    Replied_by: { type: String, default: "", ref: "User" },
+    Replied_by_name: { type: String, default: "" },
+    Replied_at: { type: Date, default: null },
+
+    History: { type: [ReviewHistorySchema], default: [] },
     Created_at: { type: Date, default: Date.now },
   },
   { collection: "Review" }
