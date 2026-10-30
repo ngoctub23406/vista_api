@@ -7,6 +7,9 @@ const {
   User,
 } = require('../models/schema');
 
+const { generateAndStoreAutoReply } = require('../services/review-auto-reply.service');
+const { createNotification } = require('../services/notification.service');
+
 const REVIEWABLE_ORDER_STATUSES = new Set(['delivered', 'review']);
 
 function cleanText(value) {
@@ -143,7 +146,31 @@ function buildReviewDto(review, extra = {}) {
     Comment: review.Comment || '',
     Images: parseImagesValue(review.Images),
     Created_at: review.Created_at,
+    Shop_reply: review.Reply_status === 'replied' && review.Reply_content
+      ? { Content: review.Reply_content, Replied_at: review.Replied_at || null }
+      : null,    
   };
+}
+
+async function processNewReview(review, orderDetail, order) {
+  try {
+    await generateAndStoreAutoReply(review.Review_id);
+  } catch (error) {
+    console.error('AI chưa sinh được Auto-reply cho đánh giá ' + review.Review_id + ':', error.message);
+  }
+
+  try {
+    await createNotification({
+      audience: 'admin',
+      type: 'review_created',
+      title: 'Đánh giá mới',
+      message: (order?.Receiver_name || 'Khách hàng') + ' · ' + review.Rating + ' sao',
+      orderId: orderDetail.Order_id,
+      link: '/admin/reviews?reviewId=' + encodeURIComponent(review.Review_id),
+    });
+  } catch (error) {
+    console.error('Lỗi gửi thông báo đánh giá mới:', error.message);
+  }
 }
 
 function maskReviewerName(value) {
@@ -285,6 +312,8 @@ const createReview = async (req, res) => {
 
     await updateOrderReviewStatus(orderDetail.Order_id);
     const productReviewSummary = await updateProductRatingAfterCreate(orderDetail.Product_variant_id, rating);
+    
+    processNewReview(createdReview.toObject(), orderDetail, order);
 
     return res.status(201).json({
       success: true,
@@ -364,8 +393,8 @@ const getReviewsByProductId = async (req, res) => {
     if (!orderDetailIds.length) {
       return res.status(200).json({ success: true, data: [] });
     }
-
-    const reviews = await Review.find({ Order_detail_id: { $in: orderDetailIds } })
+    
+    const reviews = await Review.find({ Order_detail_id: { $in: orderDetailIds }, Moderation_status: { $ne: 'rejected' } })
       .sort({ Created_at: -1 })
       .lean();
 
