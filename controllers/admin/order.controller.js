@@ -140,6 +140,7 @@ exports.getOrders = async (req, res) => {
     const status = cleanText(req.query.status);
     const fromDate = cleanText(req.query.fromDate);
     const toDate = cleanText(req.query.toDate);
+    const paymentType = cleanText(req.query.paymentType);
     const page = Math.max(1, Number(req.query.page) || 1);
     const limit = Math.min(MAX_PAGE_SIZE, Math.max(1, Number(req.query.limit) || DEFAULT_PAGE_SIZE));
 
@@ -177,6 +178,7 @@ exports.getOrders = async (req, res) => {
       },
       { $unwind: { path: "$PaymentInfo", preserveNullAndEmptyArrays: true } },
       { $match: ADMIN_VISIBLE_MATCH },
+      ...(paymentType ? [{ $match: { "PaymentInfo.Payment_type": paymentType } }] : []),
       ...buildSlaStages(new Date()),
       {
         $facet: {
@@ -331,6 +333,7 @@ async function loadOrderDetail(orderId) {
       .filter(Boolean)
       .join(", "),
     Order_notes: order.Order_notes || "",
+    Voucher_code: order.Voucher_code || "",
     Total_items_price: order.Total_items_price || 0,
     Discount_amount: order.Discount_amount || 0,
     Shipping_fee: Number(delivery?.Shipping_fee) || 0,
