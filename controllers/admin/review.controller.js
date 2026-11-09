@@ -229,9 +229,7 @@ exports.getReviews = async (req, res) => {
   }
 };
 
-async function buildReviewDetail(review) {
-  const { detail, order, variant, product } = await loadReviewContext(review);
-
+function buildDisplayReviewHistory(review, order) {
   const history = [
     {
       Event: "created",
@@ -242,6 +240,52 @@ async function buildReviewDetail(review) {
     },
     ...(review.History || []),
   ];
+
+  const has = (event) => history.some((item) => item.Event === event);
+
+  // Đánh giá cũ được duyệt trước khi có trường History: dựng lại mốc duyệt từ Moderated_at / Moderated_by_name
+  if (review.Moderation_status === "approved" && !has("approved")) {
+    history.push({
+      Event: "approved",
+      Actor_id: review.Moderated_by || "",
+      Actor_name: review.Moderated_by_name || "Nhân viên CSKH",
+      Note: "Staff duyệt đánh giá",
+      Created_at: review.Moderated_at || review.Created_at,
+    });
+  }
+
+  // Đánh giá cũ bị từ chối: dựng lại mốc từ chối
+  if (review.Moderation_status === "rejected" && !has("rejected")) {
+    history.push({
+      Event: "rejected",
+      Actor_id: review.Moderated_by || "",
+      Actor_name: review.Moderated_by_name || "Nhân viên CSKH",
+      Note: review.Moderation_note ? `Staff từ chối đánh giá: ${review.Moderation_note}` : "Staff từ chối đánh giá",
+      Created_at: review.Moderated_at || review.Created_at,
+    });
+  }
+
+  // Đánh giá cũ đã được phản hồi: dựng lại mốc gửi phản hồi
+  if (review.Reply_status === "replied" && !has("replied")) {
+    history.push({
+      Event: "replied",
+      Actor_id: review.Replied_by || "",
+      Actor_name: review.Replied_by_name || review.Moderated_by_name || "Nhân viên CSKH",
+      Note: "Staff gửi phản hồi cho khách hàng",
+      Created_at: review.Replied_at || review.Moderated_at || review.Created_at,
+    });
+  }
+
+  // Sắp xếp lịch sử theo mốc thời gian tăng dần
+  history.sort((a, b) => new Date(a.Created_at || 0) - new Date(b.Created_at || 0));
+
+  return history;
+}
+
+async function buildReviewDetail(review) {
+  const { detail, order, variant, product } = await loadReviewContext(review);
+
+  const history = buildDisplayReviewHistory(review, order);
 
   return {
     Review_id: review.Review_id,

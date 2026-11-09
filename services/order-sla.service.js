@@ -36,6 +36,7 @@ function buildSlaStages(now = new Date()) {
         Display_status: {
           $switch: {
             branches: [
+              { case: { $eq: ["$Status", "pending_payment"] }, then: "pending_payment" },
               { case: { $eq: ["$Status", "cancelled"] }, then: "cancelled" },
               { case: { $eq: ["$Status", "returning"] }, then: "returning" },
               { case: { $in: ["$Status", ["delivered", "review"]] }, then: "completed" },
@@ -70,12 +71,20 @@ function buildSlaStages(now = new Date()) {
             branches: [
               {
                 case: { $eq: ["$Sla_stage", SLA_STAGES.CONFIRM] },
-                then: { $add: [{ $ifNull: ["$Processing_started_at", "$Created_at"] }, SLA_CONFIRM_MS] },
+                then: {
+                  $add: [
+                    { $toDate: { $ifNull: ["$Processing_started_at", "$Created_at"] } },
+                    SLA_CONFIRM_MS,
+                  ],
+                },
               },
               {
                 case: { $eq: ["$Sla_stage", SLA_STAGES.HAND_OVER] },
                 then: {
-                  $add: [{ $ifNull: ["$_confirmedAt", "$Processing_started_at", "$Created_at"] }, SLA_HAND_OVER_MS],
+                  $add: [
+                    { $toDate: { $ifNull: ["$_confirmedAt", "$Processing_started_at", "$Created_at"] } },
+                    SLA_HAND_OVER_MS,
+                  ],
                 },
               },
             ],

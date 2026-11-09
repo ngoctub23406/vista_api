@@ -1,4 +1,4 @@
-const { User, Address, Order, Return_order } = require("../../models/schema");
+const { User, Address, Order, Order_detail, Return_order, Review } = require("../../models/schema");
 
 const DEFAULT_PAGE_SIZE = 10;
 const MAX_PAGE_SIZE = 50;
@@ -96,11 +96,42 @@ exports.getCustomers = async (req, res) => {
       blocked: statsGroup.blocked || 0,
     };
 
+    const userIds = items.map((user) => user.User_id);
+    const customerMetrics = new Map();
+
+    if (userIds.length > 0) {
+      const orderAgg = await Order.aggregate([
+        { $match: { User_id: { $in: userIds } } },
+        {
+          $group: {
+            _id: "$User_id",
+            orderCount: { $sum: 1 },
+            totalSpent: {
+              $sum: {
+                $cond: [
+                  { $in: ["$Status", ["delivered", "review"]] },
+                  { $ifNull: ["$Total_amount", 0] },
+                  0,
+                ],
+              },
+            },
+          },
+        },
+      ]);
+
+      for (const m of orderAgg) {
+        customerMetrics.set(m._id, {
+          orderCount: m.orderCount || 0,
+          totalSpent: m.totalSpent || 0,
+        });
+      }
+    }
+
     const totalPages = Math.ceil(totalFiltered / limit) || 0;
 
-    return res.json({
-      success: true,
-      items: items.map((user) => ({
+    const customerItems = items.map((user) => {
+      const metrics = customerMetrics.get(user.User_id) || { orderCount: 0, totalSpent: 0 };
+      return {
         User_id: user.User_id,
         Username: user.Username,
         Full_name: user.Full_name || "",
@@ -108,12 +139,27 @@ exports.getCustomers = async (req, res) => {
         Phone_number: user.Phone_number || "",
         Status: user.Status,
         Created_at: user.Created_at,
-      })),
+        order_count: metrics.orderCount,
+        total_spent: metrics.totalSpent,
+      };
+    });
+
+    return res.json({
+      success: true,
+      items: customerItems,
       total: totalFiltered,
       page,
       limit,
       totalPages,
       stats,
+      data: {
+        items: customerItems,
+        total: totalFiltered,
+        page,
+        limit,
+        totalPages,
+        stats,
+      },
     });
   } catch (error) {
     console.error("getCustomers error:", error.message);
@@ -282,6 +328,148 @@ exports.getCustomerById = async (req, res) => {
       totalSpent,
     };
 
+    const customerOrderIds = orders.map((o) => o.Order_id);
+
+    // 4. Lấy danh sách đơn hàng chi tiết, lịch sử đánh giá và đổi trả
+    const [detailedOrders, customerReviews, customerReturns] = await Promise.all([
+      customerOrderIds.length > 0
+        ? Order.aggregate([
+            { $match: { User_id: customer.User_id } },
+            { $sort: { Created_at: -1 } },
+            {
+              $lookup: {
+                from: "Payment",
+                localField: "Order_id",
+                foreignField: "Order_id",
+                as: "PaymentInfo",
+              },
+            },
+            { $unwind: { path: "$PaymentInfo", preserveNullAndEmptyArrays: true } },
+            {
+              $lookup: {
+                from: "Order_detail",
+                localField: "Order_id",
+                foreignField: "Order_id",
+                as: "Items",
+              },
+            },
+            {
+              $project: {
+                Order_id: 1,
+                Total_amount: 1,
+                Status: 1,
+                Created_at: 1,
+                Payment_type: { $ifNull: ["$PaymentInfo.Payment_type", "COD"] },
+                Payment_status: { $ifNull: ["$PaymentInfo.Payment_status", "pending"] },
+                item_count: { $size: "$Items" },
+              },
+            },
+          ])
+        : [],
+      customerOrderIds.length > 0
+        ? Review.aggregate([
+            {
+              $lookup: {
+                from: "Order_detail",
+                localField: "Order_detail_id",
+                foreignField: "Order_detail_id",
+                as: "Detail",
+              },
+            },
+            { $unwind: "$Detail" },
+            { $match: { "Detail.Order_id": { $in: customerOrderIds } } },
+            {
+              $lookup: {
+                from: "Product_variant",
+                localField: "Detail.Product_variant_id",
+                foreignField: "Product_variant_id",
+                as: "Variant",
+              },
+            },
+            { $unwind: { path: "$Variant", preserveNullAndEmptyArrays: true } },
+            {
+              $lookup: {
+                from: "Product",
+                localField: "Variant.Product_id",
+                foreignField: "Product_id",
+                as: "Product",
+              },
+            },
+            { $unwind: { path: "$Product", preserveNullAndEmptyArrays: true } },
+            { $sort: { Created_at: -1 } },
+            {
+              $project: {
+                Review_id: 1,
+                Order_id: "$Detail.Order_id",
+                Product_name: { $ifNull: ["$Product.Product_name", "$Detail.Variant_name"] },
+                Variant_name: "$Detail.Variant_name",
+                Product_image: {
+                  $cond: [
+                    { $gt: [{ $size: { $ifNull: ["$Product.Images", []] } }, 0] },
+                    { $concat: ["/assets/images/", { $arrayElemAt: ["$Product.Images", 0] }] },
+                    "",
+                  ],
+                },
+                Rating: 1,
+                Comment: 1,
+                Images: 1,
+                Moderation_status: 1,
+                Reply_content: 1,
+                Replied_at: 1,
+                Created_at: 1,
+              },
+            },
+          ])
+        : [],
+      customerOrderIds.length > 0
+        ? Return_order.aggregate([
+            { $match: { Order_id: { $in: customerOrderIds } } },
+            {
+              $lookup: {
+                from: "Product_variant",
+                localField: "Product_variant_id",
+                foreignField: "Product_variant_id",
+                as: "Variant",
+              },
+            },
+            { $unwind: { path: "$Variant", preserveNullAndEmptyArrays: true } },
+            {
+              $lookup: {
+                from: "Product",
+                localField: "Variant.Product_id",
+                foreignField: "Product_id",
+                as: "Product",
+              },
+            },
+            { $unwind: { path: "$Product", preserveNullAndEmptyArrays: true } },
+            { $sort: { Created_at: -1 } },
+            {
+              $project: {
+                Return_order_id: 1,
+                Order_id: 1,
+                Product_name: { $ifNull: ["$Product.Product_name", "$Variant.Variant_name"] },
+                Variant_name: "$Variant.Variant_name",
+                Product_image: {
+                  $cond: [
+                    { $gt: [{ $size: { $ifNull: ["$Product.Images", []] } }, 0] },
+                    { $concat: ["/assets/images/", { $arrayElemAt: ["$Product.Images", 0] }] },
+                    "",
+                  ],
+                },
+                Return_quantity: 1,
+                Reason_type: 1,
+                Reason_codes: 1,
+                Description: 1,
+                Evidence_images: 1,
+                Refund_amount: 1,
+                Status: 1,
+                Created_at: 1,
+              },
+            },
+          ])
+        : [],
+    ]);
+
     return res.json({
       success: true,
       customer: {
@@ -305,6 +493,9 @@ exports.getCustomerById = async (req, res) => {
         Is_default: Boolean(addr.Is_default),
       })),
       orderStats,
+      orders: detailedOrders,
+      reviews: customerReviews,
+      returns: customerReturns,
     });
   } catch (error) {
     console.error("getCustomerById error:", error.message);

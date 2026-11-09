@@ -289,11 +289,11 @@ function resolvePromotionStatus(voucher, usedCount = 0, now = new Date()) {
     };
   }
 
-  // 3. Đã sử dụng (Giữ nguyên ngữ nghĩa từ seed legacy, không ép thành expired)
+  // 3. Đã hết lượt (Trạng thái 'used' từ seed legacy: trong ngữ cảnh quản trị khuyến mãi Admin quy về "Đã hết lượt")
   if (rawStatus === "used") {
     return {
-      status: "used",
-      statusLabel: "Đã sử dụng",
+      status: "out_of_quota",
+      statusLabel: "Đã hết lượt",
       badgeClass: "status-expired",
       isUsable: false,
     };

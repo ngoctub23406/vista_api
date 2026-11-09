@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 const authMiddleware = require("../middleware/auth.middleware");
 const promotionController = require("../controllers/admin/promotion.controller");
 const voucherController = require("../controllers/voucher.controller");
+const { Voucher, Order } = require("../models/schema");
 const {
   parseVoucherDateTime,
   formatDateToVNISO,
@@ -63,6 +64,108 @@ test("Role permission middleware properly enforces Manager and Staff access", ()
   managerAndStaff({ user: { Role: "Customer" } }, res, next);
   assert.equal(nextCalled, false, "Customer must be blocked");
   assert.equal(res.statusCode, 403);
+});
+
+test("Promotion detail falls back to the stored usage count when no orders are found", async () => {
+  const originalFindById = Voucher.findById;
+  const originalCountDocuments = Order.countDocuments;
+  const originalAggregate = Order.aggregate;
+
+  Voucher.findById = () => ({
+    lean: async () => ({
+      _id: "507f1f77bcf86cd799439011",
+      code: "SAVE100",
+      title: "Giảm giá",
+      type: "fixed_amount",
+      status: "active",
+      startDate: "2026-01-01",
+      endDate: "2099-12-31",
+      expiry: "2099-12-31",
+      usage_limit: 10000,
+      used_count: 5,
+    }),
+  });
+  Order.countDocuments = async () => 0;
+  Order.aggregate = async () => [];
+
+  try {
+    const res = mockResponse();
+    await promotionController.getPromotionById(
+      { params: { id: "507f1f77bcf86cd799439011" } },
+      res
+    );
+
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body.data.usedCount, 5);
+  } finally {
+    Voucher.findById = originalFindById;
+    Order.countDocuments = originalCountDocuments;
+    Order.aggregate = originalAggregate;
+  }
+});
+
+test("Promotion date filters return the matching active, upcoming, and unexpired vouchers", async () => {
+  const originalFind = Voucher.find;
+  const originalCountDocuments = Voucher.countDocuments;
+  const originalAggregate = Order.aggregate;
+  const vouchers = [
+    {
+      _id: "507f1f77bcf86cd799439011",
+      code: "ACTIVE",
+      title: "Đang diễn ra",
+      type: "fixed_amount",
+      status: "active",
+      startDate: "01/01/2020",
+      endDate: "31/12/2099",
+      expiry: "31/12/2099",
+    },
+    {
+      _id: "507f1f77bcf86cd799439012",
+      code: "UPCOMING",
+      title: "Sắp diễn ra",
+      type: "fixed_amount",
+      status: "active",
+      startDate: "01/01/2099",
+      endDate: "31/12/2099",
+      expiry: "31/12/2099",
+    },
+    {
+      _id: "507f1f77bcf86cd799439013",
+      code: "EXPIRED",
+      title: "Đã kết thúc",
+      type: "fixed_amount",
+      status: "active",
+      startDate: "01/01/2020",
+      endDate: "02/01/2020",
+      expiry: "02/01/2020",
+    },
+  ];
+
+  Voucher.find = () => ({
+    sort() {
+      return this;
+    },
+    lean: async () => vouchers,
+  });
+  Voucher.countDocuments = async () => vouchers.length;
+  Order.aggregate = async () => [];
+
+  try {
+    const getCodes = async (dateFilter) => {
+      const res = mockResponse();
+      await promotionController.getPromotions({ query: { dateFilter } }, res);
+      assert.equal(res.statusCode, 200);
+      return res.body.data.items.map((item) => item.code);
+    };
+
+    assert.deepEqual(await getCodes("today"), ["ACTIVE"]);
+    assert.deepEqual(await getCodes("7days"), ["ACTIVE", "UPCOMING"]);
+    assert.deepEqual(await getCodes("30days"), ["ACTIVE", "UPCOMING"]);
+  } finally {
+    Voucher.find = originalFind;
+    Voucher.countDocuments = originalCountDocuments;
+    Order.aggregate = originalAggregate;
+  }
 });
 
 test("Promotion validation rejects invalid codes, discount values, and date ranges", async () => {

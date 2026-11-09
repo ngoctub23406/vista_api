@@ -44,11 +44,14 @@ server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
 
-// Giả lập đơn vị vận chuyển cập nhật trạng thái đơn hàng
-shippingSimulator.start();
-
-// Nhắc Admin các đơn quá hạn xử lý (SLA)
-require("./jobs/sla-reminder.job").start();
+// Giả lập đơn vị vận chuyển cập nhật trạng thái đơn hàng (tắt khi cần bảo toàn nguyên vẹn database kiểm thử)
+if (process.env.DISABLE_JOBS !== "true") {
+  shippingSimulator.start();
+  // Nhắc Admin các đơn quá hạn xử lý (SLA)
+  require("./jobs/sla-reminder.job").start();
+} else {
+  console.log("Background jobs disabled (Read-only mode)");
+}
 
 const productRoutes = require("./routes/product.routes");
 app.use("/api/products", productRoutes);
