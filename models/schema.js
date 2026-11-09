@@ -40,7 +40,7 @@ const UserSchema = new Schema(
 
     Reset_otp: { type: String, default: null },
     Reset_otp_expires: { type: Date, default: null },
-    
+
     // OTP đặt lại mật khẩu riêng cho tài khoản Admin
     Admin_reset_otp_hash: { type: String, default: null },
     Admin_reset_otp_expires: { type: Date, default: null },
@@ -124,6 +124,8 @@ const ProductVariantSchema = new Schema(
     Attributes: { type: Schema.Types.Mixed },
     Price: { type: Number, required: true },
     Stock_quantity: { type: Number, required: true, default: 0 },
+    Cost_price: { type: Number, default: null },
+    Cost_updated_at: { type: Date, default: null },
     Status: {
       type: String,
       enum: ["active", "out_of_stock"],
@@ -187,7 +189,7 @@ const VoucherSchema = new mongoose.Schema(
     statusText: { type: String, default: "" },
     Required_tier: {
   type: Number,
-  default: 0 
+  default: 0
 }
   },
   {
@@ -266,6 +268,14 @@ const OrderDetailSchema = new Schema(
     Discount_percent: { type: Number, default: 0 },
     Quantity: { type: Number, required: true, min: 1 },
     Total_price: { type: Number, required: true },
+    Cost_price_at_sale: { type: Number, default: null },
+    Cost_status: {
+      type: String,
+      enum: ["tracked", "untracked"],
+      default: "untracked",
+    },
+    Discount_allocated: { type: Number, default: 0 },
+    Net_line_revenue: { type: Number, default: 0 },
   },
   { collection: "Order_detail" }
 );
@@ -333,6 +343,7 @@ const ReturnOrderSchema = new Schema(
   {
     Return_order_id: { type: String, required: true, unique: true },
     Order_id: { type: String, required: true, ref: "Order" },
+    Order_detail_id: { type: String, ref: "Order_detail", default: "" },
     Product_variant_id: { type: String, required: true, ref: "Product_variant" },
     Return_quantity: { type: Number, default: 1, min: 1 },
     Reason_type: { type: String, required: true, trim: true },
@@ -406,7 +417,7 @@ const ReviewSchema = new Schema(
       enum: ["no_auto_reply", "pending_review", "replied"],
       default: "no_auto_reply",
     },
-    Reply_draft: { type: String, default: "" }, 
+    Reply_draft: { type: String, default: "" },
     Reply_draft_version: { type: Number, default: 0 },
     Reply_draft_by_name: { type: String, default: "" },
     Reply_draft_at: { type: Date, default: null },

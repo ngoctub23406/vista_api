@@ -83,6 +83,10 @@ function normalizeOrderDetail(detail, orderId, variant, product) {
   const discountPercent = Math.max(0, Math.min(100, Number(product?.Discount) || 0));
   const price = calculateProductFinalPrice(originalPrice, product);
 
+  const hasValidCost = variant && typeof variant.Cost_price === "number" && !isNaN(variant.Cost_price) && variant.Cost_price >= 0;
+  const costPriceAtSale = hasValidCost ? variant.Cost_price : null;
+  const costStatus = hasValidCost ? "tracked" : "untracked";
+
   return {
     Order_detail_id: cleanString(detail.Order_detail_id),
     Product_variant_id: cleanString(detail.Product_variant_id),
@@ -93,6 +97,10 @@ function normalizeOrderDetail(detail, orderId, variant, product) {
     Discount_percent: discountPercent,
     Quantity: quantity,
     Total_price: price * quantity,
+    Cost_price_at_sale: costPriceAtSale,
+    Cost_status: costStatus,
+    Discount_allocated: 0,
+    Net_line_revenue: price * quantity,
   };
 }
 
@@ -214,6 +222,37 @@ exports.createOrder = async (req, res) => {
       ? "pending_payment"
       : "processing";
     const createdAt = order.Created_at ? new Date(order.Created_at) : new Date();
+
+    if (productDiscount > 0 && totalItemsPrice > 0) {
+      let allocatedSum = 0;
+      let maxDetailIndex = 0;
+      let maxPrice = -1;
+
+      normalizedDetails.forEach((detail, index) => {
+        const allocated = Math.round((productDiscount * detail.Total_price) / totalItemsPrice);
+        detail.Discount_allocated = allocated;
+        detail.Net_line_revenue = Math.max(0, detail.Total_price - allocated);
+        allocatedSum += allocated;
+        if (detail.Total_price > maxPrice) {
+          maxPrice = detail.Total_price;
+          maxDetailIndex = index;
+        }
+      });
+
+      const remainder = productDiscount - allocatedSum;
+      if (remainder !== 0 && normalizedDetails[maxDetailIndex]) {
+        normalizedDetails[maxDetailIndex].Discount_allocated += remainder;
+        normalizedDetails[maxDetailIndex].Net_line_revenue = Math.max(
+          0,
+          normalizedDetails[maxDetailIndex].Total_price - normalizedDetails[maxDetailIndex].Discount_allocated
+        );
+      }
+    } else {
+      normalizedDetails.forEach((detail) => {
+        detail.Discount_allocated = 0;
+        detail.Net_line_revenue = detail.Total_price;
+      });
+    }
 
     await Order.create({
       Order_id: orderId,

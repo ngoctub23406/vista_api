@@ -106,11 +106,22 @@ function validateProductInput(body) {
       return { error: `variants[${index}].Status phải là một trong: ${VARIANT_STATUSES.join(", ")}` };
     }
 
+    let costPrice = null;
+    if (hasOwn(variant, "Cost_price") && variant.Cost_price !== null && variant.Cost_price !== "") {
+      const parsedCost = Number(variant.Cost_price);
+      if (!Number.isFinite(parsedCost) || parsedCost < 0) {
+        return { error: `variants[${index}].Cost_price phải là số không âm` };
+      }
+      costPrice = parsedCost;
+    }
+
     variants.push({
       Variant_name: variant.Variant_name.trim(),
       Attributes: variant.Attributes,
       Price: variant.Price,
       Stock_quantity: variant.Stock_quantity,
+      Cost_price: costPrice,
+      Cost_updated_at: costPrice !== null ? new Date() : null,
       Status: variant.Stock_quantity === 0 ? "out_of_stock" : "active",
     });
   }
@@ -149,6 +160,16 @@ function isTransactionUnsupportedError(error) {
   return error?.code === 20 ||
     error?.codeName === "IllegalOperation" ||
     /Transaction numbers are only allowed|transactions are not supported|replica set member or mongos/i.test(message);
+}
+
+function sanitizeVariantForRole(variant, userRole) {
+  if (!variant) return variant;
+  const v = typeof variant.toObject === "function" ? variant.toObject() : { ...variant };
+  if (userRole !== "Manager") {
+    delete v.Cost_price;
+    delete v.Cost_updated_at;
+  }
+  return v;
 }
 
 function createGeneratedIds(product, variants) {
@@ -308,7 +329,7 @@ exports.createProduct = async (req, res) => {
           message: "Tạo sản phẩm thành công",
           data: {
             ...saved.product.toObject(),
-            variants: saved.variants.map((variant) => variant.toObject()),
+            variants: saved.variants.map((variant) => sanitizeVariantForRole(variant, req.user?.Role)),
             category,
             brand,
           },
@@ -419,7 +440,9 @@ exports.getProducts = async (req, res) => {
     const relations = await getProductRelations(products);
     const items = products.map((product) => ({
       ...product,
-      variants: relations.variantsByProduct.get(product.Product_id) || [],
+      variants: (relations.variantsByProduct.get(product.Product_id) || []).map((v) =>
+        sanitizeVariantForRole(v, req.user?.Role)
+      ),
       category: relations.categoriesById.get(product.Category_id) || null,
       brand: relations.brandsById.get(product.Brand_id) || null,
     }));
@@ -455,7 +478,12 @@ exports.getProductById = async (req, res) => {
 
     return res.json({
       success: true,
-      data: { ...product, variants, category: category || null, brand: brand || null },
+      data: {
+        ...product,
+        variants: variants.map((v) => sanitizeVariantForRole(v, req.user?.Role)),
+        category: category || null,
+        brand: brand || null,
+      },
     });
   } catch (error) {
     console.error("Lỗi khi lấy chi tiết sản phẩm Admin:", error);
@@ -522,7 +550,7 @@ exports.updateProduct = async (req, res) => {
       message: "Cập nhật sản phẩm thành công",
       data: {
         ...updatedProduct,
-        variants: savedVariants.map((v) => (typeof v.toObject === "function" ? v.toObject() : v)),
+        variants: savedVariants.map((v) => sanitizeVariantForRole(v, req.user?.Role)),
         category,
         brand,
       },

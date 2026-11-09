@@ -29,6 +29,7 @@ const MAX_PAGE_SIZE = 50;
 const MAX_BULK_SIZE = 50;
 const CANCELLABLE_STATUSES = ["processing", "pending_payment"];
 const DISPLAY_STATUSES = [
+  "pending_payment",
   "pending_confirmation",
   "processing",
   "shipping",
@@ -62,6 +63,7 @@ async function getActor(req) {
 function getDisplayStatus(order) {
   const status = cleanText(order.Status);
 
+  if (status === "pending_payment") return "pending_payment";
   if (status === "cancelled") return "cancelled";
   if (status === "returning") return "returning";
   if (status === "delivered" || status === "review") return "completed";
@@ -73,6 +75,10 @@ function getDisplayStatus(order) {
 // Các thao tác Staff được phép làm ở bước hiện tại
 // Mã vận đơn được tạo tự động khi xác nhận đơn, nên không còn bước "tạo đơn vận chuyển"
 function getAvailableActions(order, displayStatus) {
+  if (displayStatus === "pending_payment") {
+    return ["cancel"];
+  }
+
   // Chỉ in nhãn được khi đơn đã có mã vận đơn
   const printable = hasHistoryEvent(order, ORDER_EVENTS.SHIPMENT_CREATED) ? ["print_label"] : [];
 
@@ -92,7 +98,7 @@ function getAvailableActions(order, displayStatus) {
 }
 
 // Admin chỉ thấy đơn đã "chốt": COD hiện ngay, chuyển khoản chỉ hiện khi đã thanh toán
-// (hoặc đã thanh toán rồi bị hủy → refunded). Đơn chờ thanh toán không hiện.
+// (hoặc đã thanh toán rồi bị hủy → refunded). Đơn chờ thanh toán không hiện ở luồng xử lý kho thường.
 const ADMIN_VISIBLE_MATCH = {
   $or: [
     { "PaymentInfo.Payment_type": { $ne: "BankTransfer" } },
@@ -101,9 +107,8 @@ const ADMIN_VISIBLE_MATCH = {
 };
 
 function isVisibleToAdmin(order, payment) {
-  if (!order || order.Status === "pending_payment") return false;
-  if (payment?.Payment_type !== "BankTransfer") return true;
-  return ["paid", "refunded"].includes(payment?.Payment_status);
+  if (!order) return false;
+  return true;
 }
 
 function formatOrderSummary(order, payment, delivery) {
@@ -144,8 +149,12 @@ exports.getOrders = async (req, res) => {
     const page = Math.max(1, Number(req.query.page) || 1);
     const limit = Math.min(MAX_PAGE_SIZE, Math.max(1, Number(req.query.limit) || DEFAULT_PAGE_SIZE));
 
-    // Bộ lọc chung (áp dụng cho cả danh sách và số đếm trên tab)
-    const baseMatch = { Status: { $ne: "pending_payment" } };
+    const isPendingPaymentFilter = status === "pending_payment";
+
+    // Bộ lọc chung: Mặc định loại trừ pending_payment trừ khi người dùng chủ động xem tab/cảnh báo pending_payment
+    const baseMatch = isPendingPaymentFilter
+      ? { Status: "pending_payment" }
+      : { Status: { $ne: "pending_payment" } };
 
     if (keyword) {
       const regex = new RegExp(escapeRegex(keyword), "i");
@@ -166,52 +175,62 @@ exports.getOrders = async (req, res) => {
       tabMatch = { Display_status: status };
     }
 
-    const [result] = await Order.aggregate([
-      { $match: baseMatch },
-      {
-        $lookup: {
-          from: "Payment",
-          localField: "Order_id",
-          foreignField: "Order_id",
-          as: "PaymentInfo",
+    const [aggregateResults, pendingPaymentCount] = await Promise.all([
+      Order.aggregate([
+        { $match: baseMatch },
+        {
+          $lookup: {
+            from: "Payment",
+            localField: "Order_id",
+            foreignField: "Order_id",
+            as: "PaymentInfo",
+          },
         },
-      },
-      { $unwind: { path: "$PaymentInfo", preserveNullAndEmptyArrays: true } },
-      { $match: ADMIN_VISIBLE_MATCH },
-      ...(paymentType ? [{ $match: { "PaymentInfo.Payment_type": paymentType } }] : []),
-      ...buildSlaStages(new Date()),
-      {
-        $facet: {
-          counts: [{ $group: { _id: "$Display_status", count: { $sum: 1 } } }],
-          overdue: [{ $match: { Is_overdue: true } }, { $count: "count" }],
-          total: [{ $match: tabMatch }, { $count: "count" }],
-          items: [
-            { $match: tabMatch },
-            // Ưu tiên theo hạn xử lý: quá hạn lâu nhất → sắp hết hạn → còn nhiều thời gian;
-            // đơn không có hạn (đang giao, hoàn tất...) xếp sau, mới nhất trước
-            { $addFields: { _sortDeadline: { $ifNull: ["$Sla_deadline", FAR_FUTURE] } } },
-            { $sort: { Is_overdue: -1, _sortDeadline: 1, Created_at: -1 } },
-            { $skip: (page - 1) * limit },
-            { $limit: limit },
-            {
-              $lookup: {
-                from: "Delivery",
-                localField: "Order_id",
-                foreignField: "Order_id",
-                as: "DeliveryInfo",
+        { $unwind: { path: "$PaymentInfo", preserveNullAndEmptyArrays: true } },
+        ...(isPendingPaymentFilter ? [] : [{ $match: ADMIN_VISIBLE_MATCH }]),
+        ...(paymentType ? [{ $match: { "PaymentInfo.Payment_type": paymentType } }] : []),
+        ...buildSlaStages(new Date()),
+        {
+          $facet: {
+            counts: [{ $group: { _id: "$Display_status", count: { $sum: 1 } } }],
+            overdue: [{ $match: { Is_overdue: true } }, { $count: "count" }],
+            total: [{ $match: tabMatch }, { $count: "count" }],
+            items: [
+              { $match: tabMatch },
+              // Ưu tiên theo hạn xử lý: quá hạn lâu nhất → sắp hết hạn → còn nhiều thời gian;
+              // đơn không có hạn (đang giao, hoàn tất...) xếp sau, mới nhất trước
+              { $addFields: { _sortDeadline: { $ifNull: ["$Sla_deadline", FAR_FUTURE] } } },
+              { $sort: { Is_overdue: -1, _sortDeadline: 1, Created_at: -1 } },
+              { $skip: (page - 1) * limit },
+              { $limit: limit },
+              {
+                $lookup: {
+                  from: "Delivery",
+                  localField: "Order_id",
+                  foreignField: "Order_id",
+                  as: "DeliveryInfo",
+                },
               },
-            },
-          ],
+            ],
+          },
         },
-      },
+      ]).option({ allowDiskUse: true }),
+      Order.countDocuments({ Status: "pending_payment" }),
     ]);
 
-    const counts = { all: 0, overdue: result?.overdue?.[0]?.count || 0 };
+    const result = aggregateResults?.[0] || {};
+    const counts = {
+      all: 0,
+      overdue: result?.overdue?.[0]?.count || 0,
+      pending_payment: pendingPaymentCount,
+    };
     DISPLAY_STATUSES.forEach((key) => {
-      counts[key] = 0;
+      counts[key] = key === "pending_payment" ? pendingPaymentCount : 0;
     });
     (result?.counts || []).forEach((item) => {
-      counts[item._id] = item.count;
+      if (item._id !== "pending_payment") {
+        counts[item._id] = item.count;
+      }
       counts.all += item.count;
     });
 

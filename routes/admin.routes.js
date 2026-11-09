@@ -10,6 +10,7 @@ const reviewController = require("../controllers/admin/review.controller");
 const returnOrderController = require("../controllers/admin/return-order.controller");
 const promotionController = require("../controllers/admin/promotion.controller");
 const customerController = require("../controllers/admin/customer.controller");
+const dashboardController = require("../controllers/admin/dashboard.controller");
 
 // Manager và Staff xem danh sách và chi tiết sản phẩm
 router.get(
@@ -322,6 +323,65 @@ router.patch(
   authMiddleware,
   authMiddleware.requireRole("Manager"),
   customerController.unlockCustomer
+);
+
+// ==========================================
+// MANAGEMENT DECISION DASHBOARD (MANAGER ONLY)
+// ==========================================
+router.get(
+  "/dashboard/summary-cards",
+  authMiddleware,
+  authMiddleware.requireRole("Manager"),
+  dashboardController.getSummaryCards
+);
+
+router.get(
+  "/dashboard/revenue-trend",
+  authMiddleware,
+  authMiddleware.requireRole("Manager"),
+  dashboardController.getRevenueTrend
+);
+
+router.get(
+  "/dashboard/order-pipeline",
+  authMiddleware,
+  authMiddleware.requireRole("Manager"),
+  dashboardController.getOrderPipeline
+);
+
+router.get(
+  "/dashboard/payment-breakdown",
+  authMiddleware,
+  authMiddleware.requireRole("Manager"),
+  dashboardController.getPaymentBreakdown
+);
+
+router.get(
+  "/dashboard/carrier-performance",
+  authMiddleware,
+  authMiddleware.requireRole("Manager"),
+  dashboardController.getCarrierPerformance
+);
+
+router.get(
+  "/dashboard/operational-alerts",
+  authMiddleware,
+  authMiddleware.requireRole("Manager"),
+  dashboardController.getOperationalAlerts
+);
+
+router.get(
+  "/dashboard/profit-summary",
+  authMiddleware,
+  authMiddleware.requireRole("Manager"),
+  dashboardController.getProfitSummary
+);
+
+router.get(
+  "/dashboard/profit-trend",
+  authMiddleware,
+  authMiddleware.requireRole("Manager"),
+  dashboardController.getProfitTrend
 );
 
 module.exports = router;

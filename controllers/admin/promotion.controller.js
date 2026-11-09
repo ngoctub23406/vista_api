@@ -48,6 +48,7 @@ exports.getPromotions = async (req, res) => {
     const keyword = cleanString(req.query.keyword || req.query.search);
     const statusFilter = cleanString(req.query.status);
     const type = cleanString(req.query.type);
+    const dateFilter = cleanString(req.query.dateFilter);
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
     const limit = Math.min(50, Math.max(1, parseInt(req.query.limit, 10) || 10));
 
@@ -151,6 +152,19 @@ exports.getPromotions = async (req, res) => {
       });
     }
 
+    if (dateFilter === "today") {
+      transformedItems = transformedItems.filter((item) => item.status === "active");
+    } else if (dateFilter === "7days") {
+      transformedItems = transformedItems.filter(
+        (item) => item.status === "active" || item.status === "upcoming"
+      );
+    } else if (dateFilter === "30days") {
+      transformedItems = transformedItems.filter((item) => {
+        const endDate = parseVoucherDateTime(item.endDate, true);
+        return endDate && endDate >= now;
+      });
+    }
+
     const total = transformedItems.length;
     const totalPages = Math.max(1, Math.ceil(total / limit));
     const paginatedItems = transformedItems.slice((page - 1) * limit, page * limit);
@@ -196,7 +210,7 @@ exports.getPromotionById = async (req, res) => {
     }
 
     // Đếm số đơn hàng hợp lệ
-    const [usedCount, orderSummary] = await Promise.all([
+    const [orderUsedCount, orderSummary] = await Promise.all([
       Order.countDocuments({
         $or: [{ Voucher_id: voucher.code }, { Voucher_code: voucher.code }],
         Status: { $in: VOUCHER_COUNTED_ORDER_STATUSES },
@@ -217,6 +231,7 @@ exports.getPromotionById = async (req, res) => {
         },
       ]),
     ]);
+    const usedCount = orderUsedCount || voucher.used_count || 0;
 
     const totalDiscountAmount =
       (orderSummary[0]?.totalDiscountGiven || 0) +
