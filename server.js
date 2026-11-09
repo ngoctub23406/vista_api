@@ -88,3 +88,6 @@ app.use("/api/admin", adminRoutes);
 
 const notificationRoutes = require("./routes/notification.routes");
 app.use("/api/notifications", notificationRoutes);
+
+const wishlistRoutes = require("./routes/wishlist.routes");
+app.use("/api/wishlist", wishlistRoutes);

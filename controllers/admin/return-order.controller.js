@@ -430,6 +430,11 @@ const getReturnDetail = async (req, res) => {
       success: true,
       data: {
         ...returnOrder,
+        Customer_name: customerName,
+        Product_name: productName,
+        Product_image: productImage,
+        SKU: variant?.SKU || variant?.Product_variant_id || "",
+        Variant_name: variant?.Variant_name || "",
         Reason_type: normalizeDisplayReason(returnOrder.Reason_type),
         Raw_reason_type: returnOrder.Reason_type,
         Status: returnOrder.Status === "refunded" ? "completed" : returnOrder.Status,
