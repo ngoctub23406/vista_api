@@ -392,17 +392,37 @@ exports.getProducts = async (req, res) => {
 
     const filter = {};
     if (keyword) {
-      const regex = new RegExp(escapeRegex(keyword), "i");
+      const trimmedKeyword = keyword.trim();
+      const escapedKeyword = escapeRegex(trimmedKeyword);
+      const words = trimmedKeyword.split(/\s+/).filter(Boolean);
+
+      // Tra cứu SKU của phiên bản để tránh khớp tên sản phẩm với tên biến thể.
+      const matchingVariantProductIds = await Product_variant.distinct("Product_id", {
+        "Attributes.sku": new RegExp(escapedKeyword, "i"),
+      });
+
+      const nameConditions = words.map((w) => ({
+        Product_name: new RegExp(escapeRegex(w), "i"),
+      }));
+
       filter.$or = [
-        { Product_id: regex },
-        { Product_name: regex },
-        { Description: regex },
+        { Product_id: new RegExp(escapedKeyword, "i") },
+        ...(nameConditions.length > 1
+          ? [{ $and: nameConditions }]
+          : [{ Product_name: new RegExp(escapedKeyword, "i") }]),
+        ...(matchingVariantProductIds.length > 0
+          ? [{ Product_id: { $in: matchingVariantProductIds } }]
+          : []),
       ];
     }
     if (categoryId) filter.Category_id = categoryId;
     if (brandId) filter.Brand_id = brandId;
-    if (isFlashSale.value !== undefined) filter.Is_Flash_Sale = isFlashSale.value;
-    if (isAI.value !== undefined) filter.Is_AI = isAI.value;
+    if (isFlashSale.value !== undefined) {
+      filter.Is_Flash_Sale = isFlashSale.value ? true : { $ne: true };
+    }
+    if (isAI.value !== undefined) {
+      filter.Is_AI = isAI.value ? true : { $ne: true };
+    }
 
     const productIdConditions = [];
     if (minPrice.value !== undefined || maxPrice.value !== undefined) {
