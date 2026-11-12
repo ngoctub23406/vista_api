@@ -11,6 +11,8 @@ const returnOrderController = require("../controllers/admin/return-order.control
 const promotionController = require("../controllers/admin/promotion.controller");
 const customerController = require("../controllers/admin/customer.controller");
 const dashboardController = require("../controllers/admin/dashboard.controller");
+const assistantController = require("../controllers/admin/assistant.controller");
+const notificationManagementController = require("../controllers/admin/notification-management.controller");
 
 // Manager và Staff xem danh sách và chi tiết sản phẩm
 router.get(
@@ -382,6 +384,49 @@ router.get(
   authMiddleware,
   authMiddleware.requireRole("Manager"),
   dashboardController.getProfitTrend
+);
+
+// ==========================================
+// VISTA AI MANAGEMENT ASSISTANT
+// Manager và Staff đều được phép sử dụng
+// RBAC chi tiết theo intent được kiểm tra trong controller
+// ==========================================
+router.post(
+  "/assistant/chat",
+  authMiddleware,
+  authMiddleware.requireRole("Manager", "Staff"),
+  assistantController.chat
+);
+
+// ==========================================
+// OPERATIONAL NOTIFICATION & ALERT SYSTEM (MANAGER <-> STAFF)
+// ==========================================
+router.post(
+  "/notifications/dispatch",
+  authMiddleware,
+  authMiddleware.requireRole("Manager"),
+  notificationManagementController.dispatchAlert
+);
+
+router.get(
+  "/notifications/sent",
+  authMiddleware,
+  authMiddleware.requireRole("Manager"),
+  notificationManagementController.getSentAlerts
+);
+
+router.get(
+  "/notifications/assigned",
+  authMiddleware,
+  authMiddleware.requireRole("Manager", "Staff"),
+  notificationManagementController.getAssignedAlerts
+);
+
+router.patch(
+  "/notifications/:id/acknowledge",
+  authMiddleware,
+  authMiddleware.requireRole("Staff"),
+  notificationManagementController.acknowledgeAlert
 );
 
 module.exports = router;
