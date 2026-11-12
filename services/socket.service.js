@@ -47,7 +47,14 @@ function init(httpServer, { corsOrigin } = {}) {
 
   io.on("connection", (socket) => {
     const { userId, role } = socket.data;
-    socket.join(isAdminRole(role) ? ADMIN_ROOM : userRoom(userId));
+
+    // 1. Tất cả người dùng đã xác thực (Customer, Staff, Manager) luôn tham gia Personal Room riêng
+    socket.join(userRoom(userId));
+
+    // 2. Tài khoản quản trị (Staff, Manager) đồng thời tham gia room chung của Admin
+    if (isAdminRole(role)) {
+      socket.join(ADMIN_ROOM);
+    }
   });
 
   return io;
@@ -76,4 +83,7 @@ module.exports = {
   emitToAdmins,
   emitToUser,
   emitOrderUpdated,
+  userRoom,
+  ADMIN_ROOM,
+  getIO: () => io,
 };

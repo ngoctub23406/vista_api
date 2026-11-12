@@ -5,10 +5,21 @@ const { isAdminRole } = require("../services/socket.service");
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 50;
 
-// Staff/Manager xem thông báo chung của Admin, khách xem thông báo của chính mình
+// Phân định phạm vi thông báo theo vai trò người dùng
 function buildScope(req) {
-  if (isAdminRole(req.user.Role)) {
-    return { Audience: "admin" };
+  if (req.user.Role === "Manager") {
+    return {
+      Audience: "admin",
+      Type: { $ne: "order_completed" },
+    };
+  }
+  if (req.user.Role === "Staff") {
+    return {
+      $or: [
+        { Audience: "admin", Type: { $ne: "order_completed" } },
+        { Audience: "staff_operational", "Recipients.User_id": req.user.User_id },
+      ],
+    };
   }
   return { Audience: "customer", User_id: req.user.User_id };
 }
@@ -39,13 +50,29 @@ exports.getNotifications = async (req, res) => {
 
 exports.markAsRead = async (req, res) => {
   try {
-    const result = await Notification.updateOne(
-      { ...buildScope(req), Notification_id: String(req.params.id || "").trim() },
-      { $addToSet: { Read_by: req.user.User_id } }
-    );
+    const userId = req.user.User_id;
+    const notificationId = String(req.params.id || "").trim();
+    const scope = buildScope(req);
 
-    if (result.matchedCount === 0) {
+    const doc = await Notification.findOne({ ...scope, Notification_id: notificationId });
+    if (!doc) {
       return res.status(404).json({ success: false, message: "Không tìm thấy thông báo" });
+    }
+
+    const now = new Date();
+    if (doc.Audience === "staff_operational") {
+      await Notification.updateOne(
+        { Notification_id: notificationId, "Recipients.User_id": userId },
+        {
+          $addToSet: { Read_by: userId },
+          $set: { "Recipients.$.Read_at": now },
+        }
+      );
+    } else {
+      await Notification.updateOne(
+        { Notification_id: notificationId },
+        { $addToSet: { Read_by: userId } }
+      );
     }
 
     return res.json({ success: true });
@@ -58,10 +85,28 @@ exports.markAsRead = async (req, res) => {
 exports.markAllAsRead = async (req, res) => {
   try {
     const userId = req.user.User_id;
+    const scope = buildScope(req);
+
     await Notification.updateMany(
-      { ...buildScope(req), Read_by: { $ne: userId } },
+      { ...scope, Read_by: { $ne: userId } },
       { $addToSet: { Read_by: userId } }
     );
+
+    if (req.user.Role === "Staff") {
+      await Notification.updateMany(
+        {
+          Audience: "staff_operational",
+          "Recipients.User_id": userId,
+          "Recipients.Read_at": null,
+        },
+        {
+          $set: { "Recipients.$[elem].Read_at": new Date() },
+        },
+        {
+          arrayFilters: [{ "elem.User_id": userId, "elem.Read_at": null }],
+        }
+      );
+    }
 
     return res.json({ success: true });
   } catch (error) {
