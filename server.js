@@ -10,8 +10,13 @@ connectDB();
 const app = express();
 const JSON_BODY_LIMIT = process.env.JSON_BODY_LIMIT || "50mb";
 
+const defaultOrigins = ["http://localhost:4200"];
+const allowedOrigins = process.env.CORS_ORIGIN
+  ? process.env.CORS_ORIGIN.split(",").map((origin) => origin.trim()).filter(Boolean)
+  : defaultOrigins;
+
 app.use(cors({
-  origin: 'http://localhost:4200',
+  origin: allowedOrigins,
   credentials: true
 }));
 app.use(express.json({ limit: JSON_BODY_LIMIT }));
@@ -38,7 +43,7 @@ const socketService = require("./services/socket.service");
 
 // Dùng chung một HTTP server cho Express và Socket.IO (thông báo realtime)
 const server = http.createServer(app);
-socketService.init(server, { corsOrigin: "http://localhost:4200" });
+socketService.init(server, { corsOrigin: allowedOrigins });
 
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
