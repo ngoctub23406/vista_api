@@ -541,8 +541,14 @@ function getGeneralPolicyData(role) {
         confirmDeadlineHours: 2,
         confirmDeadlineDescription: "Tối đa 2 giờ kể từ khi khách đặt hàng đối với đơn COD hoặc đơn chuyển khoản đã thanh toán",
         handoverDeadlineHours: 24,
-        handoverDeadlineDescription: "Tối đa 24 giờ kể từ khi đơn hàng được xác nhận sang bưu tá vận chuyển",
-        overdueConsequence: "Đơn vượt quá các mốc trên sẽ bị đánh dấu quá hạn xử lý (Is_overdue = true)",
+        handoverDeadlineDescription: "Tối đa 24 giờ kể từ khi đơn hàng được xác nhận cho đến khi bàn giao bưu tá vận chuyển",
+        overdueConsequence: "Đơn vượt quá các mốc trên sẽ bị gắn cờ cảnh báo đỏ quá hạn và gửi thông báo khẩn cấp cho cả Staff và Manager",
+        actionSteps: [
+          "Bước 1: Vào mục Quản lý đơn hàng, lọc danh sách đơn quá hạn (gắn cờ cảnh báo đỏ).",
+          "Bước 2: Với đơn quá hạn xác nhận (> 2 giờ): Gọi điện thoại cho khách xác minh thông tin nhận hàng, kiểm tra tồn kho và bấm nút 'Xác nhận đơn'.",
+          "Bước 3: Với đơn quá hạn bàn giao (> 24 giờ): Kiểm tra khu vực đóng gói, in phiếu giao hàng và bàn giao kiện hàng cho shipper, sau đó bấm nút 'Bàn giao'.",
+          "Bước 4: Trường hợp không liên lạc được khách hoặc hết hàng: Chọn hủy đơn kèm lý do rõ ràng hoặc báo cáo Manager hỗ trợ xử lý."
+        ],
       },
       returnPolicy: {
         windowDays: 7,
@@ -554,16 +560,16 @@ function getGeneralPolicyData(role) {
           "Hàng bị hư hỏng trong quá trình vận chuyển",
         ],
         steps: [
-          "1. Tiếp nhận và duyệt yêu cầu đổi trả (Status: pending -> approved)",
-          "2. Hướng dẫn khách gửi hàng hoàn về kho VISTA",
-          "3. Kiểm định tình trạng hàng hoá thực tế tại kho",
-          "4. Quyết định hoàn tiền (completed/refunded) hoặc từ chối nếu vi phạm điều kiện",
+          "Bước 1: Vào mục Quản lý đổi trả, kiểm tra yêu cầu của khách và bấm 'Duyệt yêu cầu'.",
+          "Bước 2: Hướng dẫn khách hàng đóng gói và gửi kiện hàng về kho VISTA.",
+          "Bước 3: Khi nhận được kiện hàng, nhân viên kiểm định ngoại quan và chức năng sản phẩm.",
+          "Bước 4: Xác nhận hoàn tiền cho khách nếu đạt yêu cầu, hoặc từ chối kèm lý do cụ thể nếu vi phạm chính sách.",
         ],
       },
       reviewPolicy: {
-        moderationRule: "Đánh giá của khách hàng phải được Staff duyệt (approved) trước khi hiển thị công khai trên website",
+        moderationRule: "Đánh giá của khách hàng phải được nhân viên duyệt trước khi hiển thị công khai trên website",
         priorityRule: "Ưu tiên phản hồi nhanh các đánh giá 1-2 sao để hỗ trợ xử lý khiếu nại khách hàng",
-        autoReplyNote: "Tính năng AI gợi ý phản hồi chỉ tạo bản nháp (draft); Staff phải kiểm tra trước khi gửi chính thức",
+        autoReplyNote: "Tính năng AI gợi ý phản hồi chỉ tạo bản nháp (draft); nhân viên phải kiểm tra trước khi gửi chính thức",
       },
       rolePermissions: {
         currentRole: role,
