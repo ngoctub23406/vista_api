@@ -13,8 +13,14 @@ function buildScope(req) {
       Type: { $ne: "order_completed" },
       $or: [
         { Target_role: { $in: ["all", "Manager"] } },
-        { Target_role: { $exists: false } },
-        { Target_role: null },
+        // Với thông báo cũ trong quá khứ chưa có Target_role: ẩn đơn hàng mới cũ, chỉ giữ sự cố / hoàn trả / SLA
+        {
+          $or: [
+            { Target_role: { $exists: false } },
+            { Target_role: null },
+          ],
+          Type: { $nin: ["order_created", "payment_confirmed"] },
+        },
       ],
     };
   }

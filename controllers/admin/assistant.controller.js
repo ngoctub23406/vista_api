@@ -97,6 +97,10 @@ const INTENT_RULES = [
       "pending_confirmation", "processing",
       "đơn nào cần", "đơn cần chú ý", "chờ xử lý", "xử lý đơn",
       "đóng gói", "bưu tá",
+      // Nhóm từ khóa hủy đơn
+      "hủy", "huỷ", "hủy đơn", "huỷ đơn", "lý do hủy", "lý do huỷ",
+      "tại sao hủy", "tại sao huỷ", "đơn bị hủy", "đơn bị huỷ",
+      "cancelled", "cancel", "tỷ lệ hủy", "tỉ lệ huỷ",
     ],
   },
 ];
@@ -329,6 +333,31 @@ async function getOrderOperationalData() {
               },
             },
           ],
+          cancellationStats: [
+            { $match: { Status: "cancelled" } },
+            {
+              $group: {
+                _id: { $ifNull: ["$Cancel_reason", "Không có lý do"] },
+                count: { $sum: 1 },
+              },
+            },
+            { $sort: { count: -1 } },
+          ],
+          sampleCancelledOrders: [
+            { $match: { Status: "cancelled" } },
+            { $sort: { Cancelled_at: -1, Created_at: -1 } },
+            { $limit: MAX_SAMPLE_ITEMS },
+            {
+              $project: {
+                _id: 0,
+                Order_id: 1,
+                Cancel_reason: 1,
+                Cancelled_by: 1,
+                Total_amount: 1,
+                Created_at: 1,
+              },
+            },
+          ],
         },
       },
     ]).catch(() => []),
@@ -358,6 +387,11 @@ async function getOrderOperationalData() {
     returning +
     pendingPaymentCount;
 
+  const cancellationStats = (facet.cancellationStats || []).map((item) => ({
+    reason: item._id || "Không có lý do",
+    count: item.count,
+  }));
+
   return {
     data_available: true,
     data: {
@@ -374,6 +408,11 @@ async function getOrderOperationalData() {
       },
       sampleOverdueOrders: facet.sampleOverdueOrders || [],
       samplePendingConfirmationOrders: facet.samplePendingConfirmationOrders || [],
+      cancellationAnalytics: {
+        totalCancelled: cancelled,
+        topReasons: cancellationStats,
+        sampleCancelledOrders: facet.sampleCancelledOrders || [],
+      },
       slaThresholds: {
         confirmTimeoutHours: 2,
         handoverTimeoutHours: 24,
