@@ -45,6 +45,12 @@ const NotificationSchema = new mongoose.Schema(
     Order_id: { type: String, default: "" },
     Link: { type: String, default: "" },
     Read_by: { type: [String], default: [] }, // Danh sách User_id đã đọc (tương thích backward)
+    Target_role: {
+      type: String,
+      enum: ["all", "Staff", "Manager"],
+      default: "all",
+      index: true,
+    },
 
     // Bổ sung cho Thông báo Vận hành Manager <-> Staff (Giai đoạn 1)
     Sender_id: { type: String, default: "", index: true },

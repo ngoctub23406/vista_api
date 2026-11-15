@@ -11,12 +11,25 @@ function buildScope(req) {
     return {
       Audience: "admin",
       Type: { $ne: "order_completed" },
+      $or: [
+        { Target_role: { $in: ["all", "Manager"] } },
+        { Target_role: { $exists: false } },
+        { Target_role: null },
+      ],
     };
   }
   if (req.user.Role === "Staff") {
     return {
       $or: [
-        { Audience: "admin", Type: { $ne: "order_completed" } },
+        {
+          Audience: "admin",
+          Type: { $ne: "order_completed" },
+          $or: [
+            { Target_role: { $in: ["all", "Staff"] } },
+            { Target_role: { $exists: false } },
+            { Target_role: null },
+          ],
+        },
         { Audience: "staff_operational", "Recipients.User_id": req.user.User_id },
       ],
     };

@@ -4,6 +4,8 @@ const { User } = require("../models/schema");
 
 const ADMIN_ROLES = ["Staff", "Manager"];
 const ADMIN_ROOM = "admins";
+const STAFF_ROOM = "role:Staff";
+const MANAGER_ROOM = "role:Manager";
 
 let io = null;
 
@@ -51,9 +53,10 @@ function init(httpServer, { corsOrigin } = {}) {
     // 1. Tất cả người dùng đã xác thực (Customer, Staff, Manager) luôn tham gia Personal Room riêng
     socket.join(userRoom(userId));
 
-    // 2. Tài khoản quản trị (Staff, Manager) đồng thời tham gia room chung của Admin
+    // 2. Tài khoản quản trị (Staff, Manager) đồng thời tham gia room chung của Admin và room theo vai trò
     if (isAdminRole(role)) {
       socket.join(ADMIN_ROOM);
+      socket.join(`role:${role}`);
     }
   });
 
@@ -62,6 +65,14 @@ function init(httpServer, { corsOrigin } = {}) {
 
 function emitToAdmins(payload) {
   io?.to(ADMIN_ROOM).emit("notification:new", payload);
+}
+
+function emitToStaff(payload) {
+  io?.to(STAFF_ROOM).emit("notification:new", payload);
+}
+
+function emitToManagers(payload) {
+  io?.to(MANAGER_ROOM).emit("notification:new", payload);
 }
 
 function emitToUser(userId, payload) {
@@ -81,9 +92,13 @@ module.exports = {
   init,
   isAdminRole,
   emitToAdmins,
+  emitToStaff,
+  emitToManagers,
   emitToUser,
   emitOrderUpdated,
   userRoom,
   ADMIN_ROOM,
+  STAFF_ROOM,
+  MANAGER_ROOM,
   getIO: () => io,
 };

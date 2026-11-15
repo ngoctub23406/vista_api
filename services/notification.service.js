@@ -3,6 +3,10 @@ const Notification = require("../models/notification.model");
 const { Order, Payment, User } = require("../models/schema");
 const socketService = require("./socket.service");
 
+const HIGH_VALUE_ORDER_THRESHOLD = process.env.HIGH_VALUE_ORDER_THRESHOLD
+  ? Number(process.env.HIGH_VALUE_ORDER_THRESHOLD)
+  : 10000000; // 10.000.000₫
+
 const CUSTOMER_ORDER_LINK = "/order-history";
 
 function adminOrderLink(orderId) {
@@ -34,6 +38,8 @@ function toClient(doc, viewerId = "") {
     link: doc.Link || "",
     createdAt: doc.Created_at,
     isRead: isRead || Boolean(myRecipient?.Read_at),
+    priority: doc.Priority || "normal",
+    targetRole: doc.Target_role || "all",
   };
 
   // Mở rộng dữ liệu cho thông báo vận hành
@@ -67,7 +73,17 @@ function toClient(doc, viewerId = "") {
   return clientObj;
 }
 
-async function createNotification({ audience, userId = "", type, title, message = "", orderId = "", link = "" }) {
+async function createNotification({
+  audience,
+  userId = "",
+  type,
+  title,
+  message = "",
+  orderId = "",
+  link = "",
+  priority = "normal",
+  targetRole = "all",
+}) {
   const doc = await Notification.create({
     Notification_id: buildNotificationId(),
     Audience: audience,
@@ -77,11 +93,19 @@ async function createNotification({ audience, userId = "", type, title, message 
     Message: message,
     Order_id: orderId,
     Link: link,
+    Priority: priority,
+    Target_role: targetRole,
   });
 
   const payload = toClient(doc.toObject());
   if (audience === "admin") {
-    socketService.emitToAdmins(payload);
+    if (targetRole === "Staff") {
+      socketService.emitToStaff(payload);
+    } else if (targetRole === "Manager") {
+      socketService.emitToManagers(payload);
+    } else {
+      socketService.emitToAdmins(payload);
+    }
   } else {
     socketService.emitToUser(userId, payload);
   }
@@ -125,31 +149,49 @@ const CUSTOMER_TEMPLATES = {
   }),
 };
 
-// Nội dung thông báo gửi Admin (Chỉ gửi các thông báo cần nhân sự/quản lý can thiệp xử lý)
+// Nội dung thông báo gửi Admin (Phân quyền: Đơn thường -> Staff; Đơn giá trị cao & sự cố/SLA -> cả Manager và Staff)
 const ADMIN_TEMPLATES = {
-  order_created: (o) => ({
-    title: "Đơn hàng mới",
-    message: `#${o.Order_id} · ${o.Receiver_name || "Khách hàng"} · ${formatMoney(o.Total_amount)}`,
-  }),
-  payment_confirmed: (o) => ({
-    title: "Đơn hàng mới",
-    message: `#${o.Order_id} · ${o.Receiver_name || "Khách hàng"} · ${formatMoney(o.Total_amount)} · Đã chuyển khoản`,
-  }),
+  order_created: (o) => {
+    const isHighValue = (Number(o.Total_amount) || 0) >= HIGH_VALUE_ORDER_THRESHOLD;
+    return {
+      title: isHighValue ? "Đơn hàng giá trị cao" : "Đơn hàng mới",
+      message: `#${o.Order_id} · ${o.Receiver_name || "Khách hàng"} · ${formatMoney(o.Total_amount)}${isHighValue ? " · Cần ưu tiên xử lý" : ""}`,
+      priority: isHighValue ? "important" : "normal",
+      targetRole: isHighValue ? "all" : "Staff",
+    };
+  },
+  payment_confirmed: (o) => {
+    const isHighValue = (Number(o.Total_amount) || 0) >= HIGH_VALUE_ORDER_THRESHOLD;
+    return {
+      title: isHighValue ? "Đơn hàng giá trị cao" : "Đơn hàng mới",
+      message: `#${o.Order_id} · ${o.Receiver_name || "Khách hàng"} · ${formatMoney(o.Total_amount)} · Đã chuyển khoản${isHighValue ? " · Cần ưu tiên xử lý" : ""}`,
+      priority: isHighValue ? "important" : "normal",
+      targetRole: isHighValue ? "all" : "Staff",
+    };
+  },
   order_cancelled_by_customer: (o) => ({
     title: "Khách hàng đã hủy đơn",
     message: `#${o.Order_id} · ${o.Receiver_name || "Khách hàng"}${o.Cancel_reason ? ` · Lý do: ${o.Cancel_reason}` : ""}`,
+    priority: "important",
+    targetRole: "all",
   }),
   return_requested: (o) => ({
     title: "Yêu cầu hoàn trả mới",
     message: `#${o.Order_id} · ${o.Receiver_name || "Khách hàng"}`,
+    priority: "important",
+    targetRole: "all",
   }),
   sla_confirm_overdue: (o) => ({
     title: "Đơn quá hạn xác nhận",
     message: `#${o.Order_id} · ${o.Receiver_name || "Khách hàng"} · đã chờ xác nhận hơn 2 giờ`,
+    priority: "urgent",
+    targetRole: "all",
   }),
   sla_hand_over_overdue: (o) => ({
     title: "Đơn quá hạn bàn giao",
     message: `#${o.Order_id} · ${o.Receiver_name || "Khách hàng"} · đã xác nhận hơn 24 giờ nhưng chưa bàn giao`,
+    priority: "urgent",
+    targetRole: "all",
   }),
 };
 
@@ -191,13 +233,14 @@ async function notifyOrderEvent(orderId, event) {
       ? await Payment.findOne({ Order_id: order.Order_id }).select("Payment_type Payment_status").lean()
       : null;
     if (adminTemplate && isVisibleToAdmin(order, payment)) {
+      const templateData = adminTemplate(order);
       tasks.push(
         createNotification({
           audience: "admin",
           type: event,
           orderId: order.Order_id,
           link: adminOrderLink(order.Order_id),
-          ...adminTemplate(order),
+          ...templateData,
         })
       );
     }
