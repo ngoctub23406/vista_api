@@ -176,7 +176,7 @@ test("1.6 – Model đầu tiên bị lỗi (404/400) → Tự động fallback 
     callCount++;
     const body = JSON.parse(options.body);
 
-    if (body.model === "llama-3.3-70b-versatile") {
+    if (body.model === assistantAiService.GROQ_MODELS[0] || body.model === "llama-3.3-70b-versatile") {
       // Model 1 lỗi 404
       return { ok: false, status: 404, text: async () => "Model deprecated" };
     }

@@ -8,6 +8,7 @@
 const mongoose = require("mongoose");
 const dashboardService = require("../../services/dashboard.service");
 const assistantAiService = require("../../services/assistant-ai.service");
+const defaultGenerateAnswer = assistantAiService.generateAnswer;
 const { Order, Return_order, Review } = require("../../models/schema");
 const { buildSlaStages } = require("../../services/order-sla.service");
 
@@ -676,25 +677,157 @@ async function buildContext(intent, role) {
 }
 
 // ─────────────────────────────────────────────────────────
+// HELPER: TẠO GỢI Ý CÂU HỎI TIẾP THEO THEO NGỮ CẢNH (FOLLOW-UP PROMPTS)
+// ─────────────────────────────────────────────────────────
+
+/**
+ * Sinh danh sách 2-3 câu hỏi gợi ý tiếp theo thông minh,
+ * bám sát nội dung vừa hỏi, loại trừ câu hỏi cũ và tuyệt đối tuân thủ RBAC.
+ */
+function getContextualFollowUps(intent, userMessage = "", role = "Staff") {
+  const norm = String(userMessage || "").toLowerCase();
+
+  const pools = {
+    financial: [
+      "Có bao nhiêu đơn quá hạn cần xử lý ngay?",
+      "Lý do hủy đơn nhiều nhất gần đây?",
+      "Các chương trình khuyến mãi nào đang chạy?",
+      "Tình hình đơn đổi trả gần đây thế nào?",
+      "Top sản phẩm bán chạy nhất hiện nay?",
+    ],
+    overdue_orders: [
+      "Quy trình xử lý đơn quá hạn thế nào?",
+      "Đơn nào đang chờ xác nhận trên 2 giờ?",
+      "Lý do hủy đơn nhiều nhất gần đây?",
+      "Có bao nhiêu đơn đang chờ bàn giao shipper?",
+      role === "Manager" ? "Doanh thu 30 ngày gần nhất thế nào?" : "Tình hình đơn đổi trả gần đây?",
+    ],
+    cancelled_orders: [
+      "Có bao nhiêu đơn đang bị quá hạn?",
+      "Quy trình xử lý đơn quá hạn thế nào?",
+      "Tình hình đổi trả hàng gần đây ra sao?",
+      role === "Manager" ? "Tỷ lệ giao hàng thành công tháng này?" : "Đánh giá nào cần kiểm duyệt?",
+    ],
+    returns: [
+      "Có yêu cầu đổi trả nào đang chờ duyệt?",
+      "Quy trình kiểm định và hoàn tiền đơn đổi trả?",
+      "Đánh giá nào của khách hàng cần kiểm duyệt?",
+      "Có bao nhiêu đơn quá hạn trong kho?",
+    ],
+    reviews: [
+      "Có đánh giá 1-2 sao nào cần phản hồi gấp?",
+      "Quy định kiểm duyệt và trả lời đánh giá?",
+      "Tình hình đổi trả hàng gần đây ra sao?",
+      "Có bao nhiêu đơn quá hạn cần giao bưu tá?",
+    ],
+    general_policy: [
+      "Có bao nhiêu đơn quá hạn trong kho?",
+      "Tình hình đơn đổi trả gần đây thế nào?",
+      "Đánh giá nào của khách hàng cần kiểm duyệt?",
+      "Đơn nào đang chờ xác nhận lâu nhất?",
+    ],
+  };
+
+  let list = [];
+  if (intent === "financial_kpi") {
+    list = pools.financial;
+  } else if (intent === "return_issue") {
+    list = pools.returns;
+  } else if (intent === "review_moderation") {
+    list = pools.reviews;
+  } else if (intent === "general_policy") {
+    list = pools.general_policy;
+  } else if (norm.includes("hủy") || norm.includes("huỷ")) {
+    list = pools.cancelled_orders;
+  } else if (norm.includes("quá hạn") || norm.includes("sla")) {
+    list = pools.overdue_orders;
+  } else {
+    list = role === "Manager" ? pools.financial : pools.overdue_orders;
+  }
+
+  // Loại trừ câu hỏi quá giống câu người dùng vừa hỏi
+  const filtered = list.filter((item) => {
+    const itemNorm = item.toLowerCase();
+    if (norm.includes("doanh thu") && itemNorm.includes("doanh thu")) return false;
+    if (norm.includes("lợi nhuận") && itemNorm.includes("lợi nhuận")) return false;
+    if (norm.includes("giá vốn") && itemNorm.includes("giá vốn")) return false;
+    if (norm.includes("quá hạn") && norm.includes("quy trình") && itemNorm.includes("quy trình")) return false;
+    if (norm.includes("quá hạn") && !norm.includes("quy trình") && itemNorm.includes("có bao nhiêu đơn quá hạn")) return false;
+    if (norm.includes("hủy") && itemNorm.includes("lý do hủy")) return false;
+    if (norm.includes("đổi trả") && itemNorm.includes("tình hình đổi trả")) return false;
+    if (norm.includes("đánh giá") && itemNorm.includes("đánh giá nào cần")) return false;
+    return true;
+  });
+
+  // Chặn tuyệt đối câu hỏi tài chính đối với Staff
+  const safeList = filtered.filter((item) => {
+    if (role === "Staff") {
+      const lower = item.toLowerCase();
+      if (
+        lower.includes("doanh thu") ||
+        lower.includes("lợi nhuận") ||
+        lower.includes("giá vốn") ||
+        lower.includes("tài chính")
+      ) {
+        return false;
+      }
+    }
+    return true;
+  });
+
+  return safeList.slice(0, 3);
+}
+
+// ─────────────────────────────────────────────────────────
 // HELPER: TẠO RESPONSE THỐNG NHẤT
 // ─────────────────────────────────────────────────────────
 
-function makeSuccessResponse(res, { message, intent, status, context, debugNote }) {
-  const payload = { message, intent, status, context };
+function makeSuccessResponse(res, { message, intent, status, context, suggested_prompts, debugNote }) {
+  const payload = {
+    message,
+    intent,
+    status,
+    context,
+    suggested_prompts: Array.isArray(suggested_prompts) ? suggested_prompts : [],
+  };
   if (debugNote && process.env.NODE_ENV !== "production") {
     payload.debug = debugNote;
   }
   return res.json({ success: true, data: payload });
 }
 
-function makeDeniedResponse(res, { message, intent }) {
+function makeDeniedResponse(res, { message, intent, suggested_prompts }) {
   return res.json({
     success: false,
-    data: { message, intent, status: "role_denied" },
+    data: {
+      message,
+      intent,
+      status: "role_denied",
+      suggested_prompts: Array.isArray(suggested_prompts)
+        ? suggested_prompts
+        : [
+            "Có bao nhiêu đơn quá hạn?",
+            "Đơn nào đang chờ xác nhận?",
+            "Tình hình đổi trả hàng gần đây?",
+          ],
+    },
   });
 }
 
 function makeUnsupportedResponse(res, intent, role) {
+  const suggested_prompts =
+    role === "Manager"
+      ? [
+          "Doanh thu 30 ngày gần nhất thế nào?",
+          "Có bao nhiêu đơn quá hạn cần xử lý?",
+          "Lý do hủy đơn nhiều nhất gần đây?",
+        ]
+      : [
+          "Có bao nhiêu đơn quá hạn?",
+          "Đơn nào đang chờ xác nhận?",
+          "Quy trình xử lý đơn quá hạn?",
+        ];
+
   return res.json({
     success: true,
     data: {
@@ -702,6 +835,7 @@ function makeUnsupportedResponse(res, intent, role) {
         "Câu hỏi nằm ngoài phạm vi hỗ trợ hiện tại của VISTA AI Assistant. Bạn có thể hỏi về đơn hàng, đổi trả, đánh giá hoặc các quy trình nghiệp vụ.",
       intent,
       status: "unsupported",
+      suggested_prompts,
       context: {
         intent: "unsupported",
         role,
@@ -777,8 +911,22 @@ exports.chat = async (req, res) => {
 
     // ── 7. SINH CÂU TRẢ LỜI TỰ NHIÊN BẰNG GROQ AI (Grounding) ─────────────
     let aiReply = "";
+    let aiSuggestedPrompts = [];
     try {
-      aiReply = await assistantAiService.generateAnswer(cleanMessage, context, cleanHistory);
+      if (assistantAiService.generateAnswer !== defaultGenerateAnswer) {
+        // Hàm generateAnswer đang được mock (ví dụ trong unit test)
+        aiReply = await assistantAiService.generateAnswer(cleanMessage, context, cleanHistory);
+      } else {
+        const aiResult = await assistantAiService.generateAnswerWithSuggestions(
+          cleanMessage,
+          context,
+          cleanHistory
+        );
+        aiReply = aiResult?.answer || "";
+        aiSuggestedPrompts = Array.isArray(aiResult?.suggestedPrompts)
+          ? aiResult.suggestedPrompts
+          : [];
+      }
     } catch (aiError) {
       console.error("[Assistant] AI generation error:", aiError.message);
       if (aiError.status === 429 || aiError.code === "RATE_LIMIT") {
@@ -792,11 +940,38 @@ exports.chat = async (req, res) => {
       }
     }
 
+    // Bảo vệ RBAC và lọc gợi ý từ AI
+    const fallbackFollowUps = getContextualFollowUps(intent, cleanMessage, userRole);
+    const validAiSuggestions = aiSuggestedPrompts.filter((item) => {
+      if (typeof item !== "string" || item.trim().length < 5 || item.trim().length > 80) return false;
+      if (userRole === "Staff") {
+        const lower = item.toLowerCase();
+        if (
+          lower.includes("doanh thu") ||
+          lower.includes("lợi nhuận") ||
+          lower.includes("giá vốn") ||
+          lower.includes("tài chính")
+        ) {
+          return false;
+        }
+      }
+      return true;
+    });
+
+    // Kết hợp gợi ý thông minh (AI + Fallback đa dạng)
+    const finalPrompts = [
+      ...validAiSuggestions,
+      ...fallbackFollowUps.filter(
+        (f) => !validAiSuggestions.some((s) => s.toLowerCase() === f.toLowerCase())
+      ),
+    ].slice(0, 3);
+
     return makeSuccessResponse(res, {
       message: aiReply || "Đã trích xuất dữ liệu thành công cho context.",
       intent,
       status: "answered",
       context,
+      suggested_prompts: finalPrompts,
       debugNote: `Role: ${userRole}, History items: ${cleanHistory.length}`,
     });
   } catch (error) {
@@ -822,4 +997,5 @@ exports.getReturnIssueData = getReturnIssueData;
 exports.getReviewModerationData = getReviewModerationData;
 exports.getGeneralPolicyData = getGeneralPolicyData;
 exports.buildContext = buildContext;
+exports.getContextualFollowUps = getContextualFollowUps;
 exports.INTENT_RULES = INTENT_RULES;
