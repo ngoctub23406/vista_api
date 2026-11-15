@@ -62,6 +62,13 @@ NGUYÊN TẮC BẢO MẬT & VẬN HÀNH (BẮT BUỘC):
    - Dùng in đậm vừa phải ở các nút bấm, tên phân hệ hoặc mốc thời gian then chốt (ví dụ: **Quản lý khuyến mãi**, **Xác nhận đơn**, **2 giờ**). Không in hoa hét lớn hoặc dùng các tag máy móc.
    - Tránh câu chào hỏi dài dòng rườm rà. Bắt đầu trả lời trực tiếp vào nội dung.
 
+6. GỢI Ý CÂU HỎI TIẾP THEO (BẮT BUỘC Ở DÒNG CUỐI CÙNG):
+   - Ở dòng cuối cùng của phản hồi, hãy gợi ý đúng 2-3 câu hỏi ngắn gọn mà người dùng (${roleName}) có thể quan tâm tiếp theo liên quan đến nội dung vừa thảo luận, theo cú pháp:
+   [GỢI Ý]: Câu hỏi 1 | Câu hỏi 2 | Câu hỏi 3
+   - LƯU Ý BẮT BUỘC:
+     + TUYỆT ĐỐI KHÔNG lặp lại câu hỏi mà người dùng vừa hỏi.
+     + Nếu vai trò là Staff: Tuyệt đối KHÔNG gợi ý câu hỏi về doanh thu, tài chính, lợi nhuận, giá vốn.
+
 [DỮ LIỆU HỆ THỐNG]:
 - Dữ liệu khả dụng: ${context?.data_available ? "CÓ" : "KHÔNG CÓ"}
 - Thời điểm trích xuất: ${context?.data_timestamp || "N/A"}
@@ -70,16 +77,48 @@ ${contextJson}`;
 }
 
 /**
+ * Tách nội dung trả lời chính và các gợi ý câu hỏi tiếp theo
+ */
+function extractResponseAndSuggestions(rawText) {
+  if (!rawText) return { answer: "", suggestedPrompts: [] };
+  let cleaned = String(rawText)
+    .replace(/<think>[\s\S]*?<\/think>/g, "")
+    .replace(/^["“”\s]+|["“”\s]+$/g, "")
+    .trim();
+
+  let suggestedPrompts = [];
+  const match = cleaned.match(/(?:\[GỢI Ý(?: TIẾP THEO)?\]|Gợi ý câu hỏi tiếp theo:?)\s*([\s\S]*?)$/i);
+  if (match) {
+    const rawSuggestions = match[1].trim();
+    cleaned = cleaned.replace(match[0], "").trim();
+    if (rawSuggestions.includes("|")) {
+      suggestedPrompts = rawSuggestions
+        .split("|")
+        .map((s) => s.replace(/^[-•*\d\.\s]+/, "").trim())
+        .filter((s) => s.length > 5 && s.length < 80);
+    } else {
+      suggestedPrompts = rawSuggestions
+        .split("\n")
+        .map((s) => s.replace(/^[-•*\d\.\s]+/, "").trim())
+        .filter((s) => s.length > 5 && s.length < 80);
+    }
+  }
+
+  return {
+    answer: cleaned,
+    suggestedPrompts: suggestedPrompts.slice(0, 3),
+  };
+}
+
+/**
  * Làm sạch phản hồi từ Groq:
  * - Loại bỏ thẻ <think>...</think> (nếu model suy nghĩ trả về)
+ * - Tách phần [GỢI Ý] để lấy nội dung trả lời chính
  * - Cắt bỏ dấu ngoặc kép thừa ở đầu/cuối
  */
 function cleanAiResponse(rawText) {
   if (!rawText) return "";
-  return String(rawText)
-    .replace(/<think>[\s\S]*?<\/think>/g, "")
-    .replace(/^["“”\s]+|["“”\s]+$/g, "")
-    .trim();
+  return extractResponseAndSuggestions(rawText).answer;
 }
 
 /**
@@ -135,14 +174,13 @@ async function callGroqChat(messages) {
 
       const data = await response.json();
       const rawContent = data?.choices?.[0]?.message?.content || "";
-      const text = cleanAiResponse(rawContent);
 
-      if (!text) {
+      if (!rawContent || !rawContent.trim()) {
         lastError = new Error(`Model ${model} không trả về nội dung`);
         continue;
       }
 
-      return text;
+      return rawContent;
     } catch (err) {
       if (err.name === "TimeoutError" || err.name === "AbortError") {
         const timeoutErr = new Error("Yêu cầu tới dịch vụ AI đã quá thời gian xử lý (timeout 15s)");
@@ -157,12 +195,11 @@ async function callGroqChat(messages) {
 }
 
 /**
- * Hàm chính: Sinh câu trả lời dựa trên câu hỏi, context và lịch sử hội thoại
+ * Sinh câu trả lời kèm gợi ý câu hỏi tiếp theo
  */
-async function generateAnswer(userMessage, context, history = []) {
+async function generateAnswerWithSuggestions(userMessage, context, history = []) {
   const systemPrompt = buildSystemPrompt(context);
 
-  // Chỉ nhận các role user và assistant từ history
   const safeHistory = (Array.isArray(history) ? history : [])
     .filter((h) => h && (h.role === "user" || h.role === "assistant") && h.content)
     .slice(-MAX_HISTORY_TURNS)
@@ -177,11 +214,22 @@ async function generateAnswer(userMessage, context, history = []) {
     { role: "user", content: String(userMessage).slice(0, 1000) },
   ];
 
-  return await callGroqChat(messages);
+  const rawText = await callGroqChat(messages);
+  return extractResponseAndSuggestions(rawText);
+}
+
+/**
+ * Hàm chính: Sinh câu trả lời dựa trên câu hỏi, context và lịch sử hội thoại
+ */
+async function generateAnswer(userMessage, context, history = []) {
+  const result = await generateAnswerWithSuggestions(userMessage, context, history);
+  return result.answer;
 }
 
 module.exports = {
   generateAnswer,
+  generateAnswerWithSuggestions,
+  extractResponseAndSuggestions,
   buildSystemPrompt,
   cleanAiResponse,
   callGroqChat,
