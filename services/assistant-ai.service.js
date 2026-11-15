@@ -6,8 +6,8 @@
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 const GROQ_MODELS = [
-  "llama-3.3-70b-versatile",
-  "llama-3.1-8b-instant",
+  "openai/gpt-oss-120b",
+  "openai/gpt-oss-20b",
   "qwen/qwen3.8-27b",
 ];
 const AI_TIMEOUT_MS = 15000;
@@ -91,7 +91,7 @@ async function callGroqChat(messages) {
         },
         body: JSON.stringify({
           model,
-          max_tokens: 1500,
+          max_tokens: 700,
           temperature: 0.2, // Nhiệt độ thấp để giảm ảo giác tối đa
           messages,
         }),
