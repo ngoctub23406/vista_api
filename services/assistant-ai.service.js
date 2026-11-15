@@ -87,21 +87,20 @@ function extractResponseAndSuggestions(rawText) {
     .trim();
 
   let suggestedPrompts = [];
-  const match = cleaned.match(/(?:\[GỢI Ý(?: TIẾP THEO)?\]|Gợi ý câu hỏi tiếp theo:?)\s*([\s\S]*?)$/i);
+  const match = cleaned.match(/(?:\[GỢI Ý(?: TIẾP THEO)?\]:?|Gợi ý câu hỏi tiếp theo:?)\s*:?\s*([\s\S]*?)$/i);
   if (match) {
     const rawSuggestions = match[1].trim();
     cleaned = cleaned.replace(match[0], "").trim();
-    if (rawSuggestions.includes("|")) {
-      suggestedPrompts = rawSuggestions
-        .split("|")
-        .map((s) => s.replace(/^[-•*\d\.\s]+/, "").trim())
-        .filter((s) => s.length > 5 && s.length < 80);
-    } else {
-      suggestedPrompts = rawSuggestions
-        .split("\n")
-        .map((s) => s.replace(/^[-•*\d\.\s]+/, "").trim())
-        .filter((s) => s.length > 5 && s.length < 80);
-    }
+    const delimiter = rawSuggestions.includes("|") ? "|" : "\n";
+    suggestedPrompts = rawSuggestions
+      .split(delimiter)
+      .map((s) =>
+        s
+          .replace(/^[-•*\d\.\s:]+/, "")
+          .replace(/[\s\.:]+$/, "")
+          .trim()
+      )
+      .filter((s) => s.length > 5 && s.length < 80);
   }
 
   return {
