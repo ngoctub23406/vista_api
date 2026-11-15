@@ -169,3 +169,24 @@ test("Manager VÀ Staff ĐỀU nhận được cảnh báo vi phạm SLA hoặc 
   assert.equal(staffRes.status, 200);
   assert.ok(staffRes.data.data.items.some((i) => i.id === slaNotifId), "Staff phải nhận cảnh báo SLA");
 });
+
+test("Manager tự động ẩn các thông báo đơn hàng mới cũ trong quá khứ (chưa có Target_role)", async () => {
+  const legacyOrderNotifId = `NTF_LEGACY_ORD_${Date.now()}`;
+  await Notification.collection.insertOne({
+    Notification_id: legacyOrderNotifId,
+    Audience: "admin",
+    Type: "order_created",
+    Title: "[LEGACY_TEST] Đơn hàng mới cũ",
+    Message: "#ORD_LEGACY · 500.000₫",
+    Created_at: new Date(),
+    Read_by: [],
+  });
+
+  const managerRes = await sendRequest({ url: "/api/notifications", token: managerToken });
+  assert.equal(managerRes.status, 200);
+  assert.equal(
+    managerRes.data.data.items.some((i) => i.id === legacyOrderNotifId),
+    false,
+    "Manager KHÔNG thấy thông báo đơn hàng mới cũ trong quá khứ"
+  );
+});
