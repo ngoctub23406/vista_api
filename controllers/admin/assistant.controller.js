@@ -942,21 +942,28 @@ exports.chat = async (req, res) => {
 
     // Bảo vệ RBAC và lọc gợi ý từ AI
     const fallbackFollowUps = getContextualFollowUps(intent, cleanMessage, userRole);
-    const validAiSuggestions = aiSuggestedPrompts.filter((item) => {
-      if (typeof item !== "string" || item.trim().length < 5 || item.trim().length > 80) return false;
-      if (userRole === "Staff") {
-        const lower = item.toLowerCase();
-        if (
-          lower.includes("doanh thu") ||
-          lower.includes("lợi nhuận") ||
-          lower.includes("giá vốn") ||
-          lower.includes("tài chính")
-        ) {
-          return false;
+    const validAiSuggestions = aiSuggestedPrompts
+      .map((item) =>
+        String(item || "")
+          .replace(/^[-•*\d\.\s:]+/, "")
+          .replace(/[\s\.:]+$/, "")
+          .trim()
+      )
+      .filter((item) => {
+        if (!item || item.length < 5 || item.length > 80) return false;
+        if (userRole === "Staff") {
+          const lower = item.toLowerCase();
+          if (
+            lower.includes("doanh thu") ||
+            lower.includes("lợi nhuận") ||
+            lower.includes("giá vốn") ||
+            lower.includes("tài chính")
+          ) {
+            return false;
+          }
         }
-      }
-      return true;
-    });
+        return true;
+      });
 
     // Kết hợp gợi ý thông minh (AI + Fallback đa dạng)
     const finalPrompts = [
