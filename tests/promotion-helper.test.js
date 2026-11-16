@@ -133,10 +133,10 @@ test("7. Voucher legacy available, expiring, used, expired", () => {
   assert.equal(expRes.statusLabel, "Sắp hết hạn");
   assert.equal(expRes.isExpiringSoon, true);
 
-  // used -> giữ nguyên 'used', nhãn 'Đã sử dụng' (không ép sang expired)
+  // used -> chuẩn hóa sang 'out_of_quota', nhãn 'Đã hết lượt'
   const usedRes = resolvePromotionStatus({ status: "used", startDate: "01/01/2026", expiry: "31/12/2026" }, 0, now);
-  assert.equal(usedRes.status, "used");
-  assert.equal(usedRes.statusLabel, "Đã sử dụng");
+  assert.equal(usedRes.status, "out_of_quota");
+  assert.equal(usedRes.statusLabel, "Đã hết lượt");
 
   // expired -> quá hạn thời gian
   const expiredRes = resolvePromotionStatus({ status: "available", startDate: "01/01/2025", expiry: "31/12/2025" }, 0, now);
