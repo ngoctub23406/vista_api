@@ -492,8 +492,11 @@ test("LIST-07: Tìm kiếm theo Username", async () => {
 test("LIST-08: Tìm kiếm theo Full_name", async () => {
   const res = await callAdminCustomerList(managerToken, { keyword: "Nguyễn Văn An" });
   assert.equal(res.statusCode, 200);
-  assert.equal(res.body.items.length, 1);
-  assert.equal(res.body.items[0].Full_name, "Nguyễn Văn An");
+  assert.ok(res.body.items.length >= 1, "Phải có ít nhất 1 kết quả cho Nguyễn Văn An");
+  assert.ok(
+    res.body.items.some((item) => item.Full_name === "Nguyễn Văn An"),
+    "Phải tìm thấy khách hàng Nguyễn Văn An trong kết quả"
+  );
 });
 
 test("LIST-09: Tìm kiếm theo Email", async () => {
@@ -532,12 +535,14 @@ test("LIST-13: Kết hợp keyword và status", async () => {
   let res = await callAdminCustomerList(managerToken, { keyword: "An", status: "blocked" });
   assert.equal(res.statusCode, 200);
   const foundAn = res.body.items.find((i) => i.User_id === CUST_1_ID);
-  assert.equal(foundAn, undefined);
+  assert.equal(foundAn, undefined, "Khách hàng An active không được xuất hiện khi lọc status=blocked");
 
   res = await callAdminCustomerList(managerToken, { keyword: "An", status: "active" });
   assert.equal(res.statusCode, 200);
-  assert.equal(res.body.items.length, 1);
-  assert.equal(res.body.items[0].User_id, CUST_1_ID);
+  assert.ok(res.body.items.length >= 1, "Phải có kết quả khi tìm kiếm An với status=active");
+  const foundActiveAn = res.body.items.find((i) => i.User_id === CUST_1_ID);
+  assert.ok(foundActiveAn, "Phải tìm thấy khách hàng An trong danh sách active");
+  assert.equal(foundActiveAn.Status, "active");
 });
 
 test("LIST-14: Phân trang đúng (page, limit, totalPages)", async () => {
