@@ -149,12 +149,8 @@ exports.getOrders = async (req, res) => {
     const page = Math.max(1, Number(req.query.page) || 1);
     const limit = Math.min(MAX_PAGE_SIZE, Math.max(1, Number(req.query.limit) || DEFAULT_PAGE_SIZE));
 
-    const isPendingPaymentFilter = status === "pending_payment";
-
-    // Bộ lọc chung: Mặc định loại trừ pending_payment trừ khi người dùng chủ động xem tab/cảnh báo pending_payment
-    const baseMatch = isPendingPaymentFilter
-      ? { Status: "pending_payment" }
-      : { Status: { $ne: "pending_payment" } };
+    // Bộ lọc chung (từ khóa, khoảng ngày) - không lọc status ở baseMatch để đếm đầy đủ các tab
+    const baseMatch = {};
 
     if (keyword) {
       const regex = new RegExp(escapeRegex(keyword), "i");
@@ -167,71 +163,85 @@ exports.getOrders = async (req, res) => {
       if (toDate) baseMatch.Created_at.$lte = new Date(`${toDate}T23:59:59.999`);
     }
 
-    // Bộ lọc theo tab đang chọn
+    // Bộ lọc theo tab đang chọn (chỉ áp dụng cho danh sách hiển thị và tổng phân trang của tab đó)
     let tabMatch = {};
     if (status === "overdue") {
       tabMatch = { Is_overdue: true };
+    } else if (status === "pending_payment") {
+      tabMatch = { Display_status: "pending_payment" };
     } else if (DISPLAY_STATUSES.includes(status)) {
       tabMatch = { Display_status: status };
+    } else {
+      // Tab "Tất cả" (status === ""): Hiển thị các đơn trong luồng kho (loại trừ pending_payment)
+      tabMatch = { Display_status: { $ne: "pending_payment" } };
     }
 
-    const [aggregateResults, pendingPaymentCount] = await Promise.all([
-      Order.aggregate([
-        { $match: baseMatch },
-        {
-          $lookup: {
-            from: "Payment",
-            localField: "Order_id",
-            foreignField: "Order_id",
-            as: "PaymentInfo",
-          },
+    // Điều kiện hiển thị đơn với Admin:
+    // 1. Đơn chờ thanh toán (để Staff xem và có thể hủy nếu cần)
+    // 2. Các đơn trong luồng kho: COD, hoặc chuyển khoản/cổng online đã thanh toán/hoàn tiền
+    const orderVisibleMatch = {
+      $or: [
+        { Status: "pending_payment" },
+        { "PaymentInfo.Payment_type": { $ne: "BankTransfer" } },
+        { "PaymentInfo.Payment_status": { $in: ["paid", "refunded"] } },
+      ],
+    };
+
+    const aggregateResults = await Order.aggregate([
+      ...(Object.keys(baseMatch).length ? [{ $match: baseMatch }] : []),
+      {
+        $lookup: {
+          from: "Payment",
+          localField: "Order_id",
+          foreignField: "Order_id",
+          as: "PaymentInfo",
         },
-        { $unwind: { path: "$PaymentInfo", preserveNullAndEmptyArrays: true } },
-        ...(isPendingPaymentFilter ? [] : [{ $match: ADMIN_VISIBLE_MATCH }]),
-        ...(paymentType ? [{ $match: { "PaymentInfo.Payment_type": paymentType } }] : []),
-        ...buildSlaStages(new Date()),
-        {
-          $facet: {
-            counts: [{ $group: { _id: "$Display_status", count: { $sum: 1 } } }],
-            overdue: [{ $match: { Is_overdue: true } }, { $count: "count" }],
-            total: [{ $match: tabMatch }, { $count: "count" }],
-            items: [
-              { $match: tabMatch },
-              // Ưu tiên theo hạn xử lý: quá hạn lâu nhất → sắp hết hạn → còn nhiều thời gian;
-              // đơn không có hạn (đang giao, hoàn tất...) xếp sau, mới nhất trước
-              { $addFields: { _sortDeadline: { $ifNull: ["$Sla_deadline", FAR_FUTURE] } } },
-              { $sort: { Is_overdue: -1, _sortDeadline: 1, Created_at: -1 } },
-              { $skip: (page - 1) * limit },
-              { $limit: limit },
-              {
-                $lookup: {
-                  from: "Delivery",
-                  localField: "Order_id",
-                  foreignField: "Order_id",
-                  as: "DeliveryInfo",
-                },
+      },
+      { $unwind: { path: "$PaymentInfo", preserveNullAndEmptyArrays: true } },
+      { $match: orderVisibleMatch },
+      ...(paymentType ? [{ $match: { "PaymentInfo.Payment_type": paymentType } }] : []),
+      ...buildSlaStages(new Date()),
+      {
+        $facet: {
+          counts: [{ $group: { _id: "$Display_status", count: { $sum: 1 } } }],
+          overdue: [{ $match: { Is_overdue: true } }, { $count: "count" }],
+          total: [{ $match: tabMatch }, { $count: "count" }],
+          items: [
+            { $match: tabMatch },
+            // Ưu tiên theo hạn xử lý: quá hạn lâu nhất → sắp hết hạn → còn nhiều thời gian;
+            // đơn không có hạn (đang giao, hoàn tất...) xếp sau, mới nhất trước
+            { $addFields: { _sortDeadline: { $ifNull: ["$Sla_deadline", FAR_FUTURE] } } },
+            { $sort: { Is_overdue: -1, _sortDeadline: 1, Created_at: -1 } },
+            { $skip: (page - 1) * limit },
+            { $limit: limit },
+            {
+              $lookup: {
+                from: "Delivery",
+                localField: "Order_id",
+                foreignField: "Order_id",
+                as: "DeliveryInfo",
               },
-            ],
-          },
+            },
+          ],
         },
-      ]).option({ allowDiskUse: true }),
-      Order.countDocuments({ Status: "pending_payment" }),
-    ]);
+      },
+    ]).option({ allowDiskUse: true });
 
     const result = aggregateResults?.[0] || {};
     const counts = {
       all: 0,
       overdue: result?.overdue?.[0]?.count || 0,
-      pending_payment: pendingPaymentCount,
     };
     DISPLAY_STATUSES.forEach((key) => {
-      counts[key] = key === "pending_payment" ? pendingPaymentCount : 0;
+      counts[key] = 0;
     });
     (result?.counts || []).forEach((item) => {
-      if (item._id !== "pending_payment") {
+      if (item._id && counts.hasOwnProperty(item._id)) {
         counts[item._id] = item.count;
       }
-      counts.all += item.count;
+      if (item._id !== "pending_payment") {
+        counts.all += item.count;
+      }
     });
 
     const items = (result?.items || []).map((order) =>
